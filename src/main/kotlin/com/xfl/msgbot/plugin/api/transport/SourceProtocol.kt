@@ -44,9 +44,11 @@ object SourceProtocol {
         data class Describe(val sourceId: String, val displayName: String, val capabilities: List<String>) : Frame
     }
 
-    fun encode(frame: Frame): ByteArray = ValueCodec.encode(toValue(frame))
+    fun encode(frame: Frame, onBlob: ValueCodec.BlobHook = ValueCodec.BlobHook { it }): ByteArray =
+        ValueCodec.encode(toValue(frame), onBlob)
 
-    fun decode(bytes: ByteArray): Frame = fromValue(ValueCodec.decode(bytes))
+    fun decode(bytes: ByteArray, onBlob: ValueCodec.BlobHook = ValueCodec.BlobHook { it }): Frame =
+        fromValue(ValueCodec.decode(bytes, onBlob))
 
     private fun toValue(frame: Frame): Value =
         when (frame) {

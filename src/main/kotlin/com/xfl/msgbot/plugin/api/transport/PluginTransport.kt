@@ -5,6 +5,8 @@
 
 package com.xfl.msgbot.plugin.api.transport
 
+import com.xfl.msgbot.plugin.api.serialization.ValueCodec
+
 /**
  * Bidirectional byte-frame channel between host and plugin. The protocol
  * ([PluginProtocol]) and endpoints ([RemoteScriptEngine], [EngineHost]) are transport-agnostic;
@@ -19,4 +21,14 @@ interface PluginTransport {
     fun setListener(listener: (ByteArray) -> Unit)
 
     fun close()
+
+    /**
+     * Blob rewriting for this transport. A frame is a byte array, so a transport that can carry
+     * bytes another way (shared memory over Binder) moves large ones out of the frame in
+     * [outbound] and restores them in [inbound]. Defaults keep everything inline, which is what an
+     * in-process transport wants.
+     */
+    fun outbound(): ValueCodec.BlobHook = ValueCodec.BlobHook { it }
+
+    fun inbound(): ValueCodec.BlobHook = ValueCodec.BlobHook { it }
 }

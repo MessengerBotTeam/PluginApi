@@ -43,7 +43,7 @@ class EngineHost(
             val id = callSeq.incrementAndGet()
             val future = CompletableFuture<Value>()
             pendingCalls[id] = future
-            transport.send(PluginProtocol.encode(PluginProtocol.Frame.HostCall(id, method, args)))
+            transport.send(PluginProtocol.encode(PluginProtocol.Frame.HostCall(id, method, args), transport.outbound()))
             try {
                 future.get(callTimeoutMs, TimeUnit.MILLISECONDS)
             } finally {
@@ -60,7 +60,7 @@ class EngineHost(
     }
 
     private fun onFrame(bytes: ByteArray) {
-        when (val frame = PluginProtocol.decode(bytes)) {
+        when (val frame = PluginProtocol.decode(bytes, transport.inbound())) {
             is PluginProtocol.Frame.Load -> engineExecutor.submit {
                 // Empty shim => the host has none for our language; fall back to our own.
                 val shim = frame.shim.ifEmpty { shimProvider(frame.apiLevel).orEmpty() }
@@ -69,7 +69,7 @@ class EngineHost(
             is PluginProtocol.Frame.Dispatch -> engineExecutor.submit { engine.dispatch(frame.event) }
             is PluginProtocol.Frame.Eval -> engineExecutor.submit {
                 val result = engine.eval(frame.source)
-                transport.send(PluginProtocol.encode(PluginProtocol.Frame.EvalResult(frame.id, result)))
+                transport.send(PluginProtocol.encode(PluginProtocol.Frame.EvalResult(frame.id, result), transport.outbound()))
             }
             is PluginProtocol.Frame.Close -> engineExecutor.submit {
                 engine.close()

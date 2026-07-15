@@ -49,9 +49,11 @@ object PluginProtocol {
         data class EvalResult(val id: Long, val value: Value) : Frame
     }
 
-    fun encode(frame: Frame): ByteArray = ValueCodec.encode(toValue(frame))
+    fun encode(frame: Frame, onBlob: ValueCodec.BlobHook = ValueCodec.BlobHook { it }): ByteArray =
+        ValueCodec.encode(toValue(frame), onBlob)
 
-    fun decode(bytes: ByteArray): Frame = fromValue(ValueCodec.decode(bytes))
+    fun decode(bytes: ByteArray, onBlob: ValueCodec.BlobHook = ValueCodec.BlobHook { it }): Frame =
+        fromValue(ValueCodec.decode(bytes, onBlob))
 
     private fun toValue(frame: Frame): Value =
         when (frame) {

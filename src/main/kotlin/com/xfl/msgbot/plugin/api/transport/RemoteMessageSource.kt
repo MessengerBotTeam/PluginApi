@@ -52,7 +52,7 @@ class RemoteMessageSource(
         val id = callSeq.incrementAndGet()
         val future = CompletableFuture<Value>()
         pendingCalls[id] = future
-        transport.send(SourceProtocol.encode(SourceProtocol.Frame.Call(id, method, args)))
+        transport.send(SourceProtocol.encode(SourceProtocol.Frame.Call(id, method, args), transport.outbound()))
         return try {
             future.get(CALL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
         } catch (e: Exception) {
@@ -62,9 +62,9 @@ class RemoteMessageSource(
         }
     }
 
-    override fun start() = transport.send(SourceProtocol.encode(SourceProtocol.Frame.Start))
+    override fun start() = transport.send(SourceProtocol.encode(SourceProtocol.Frame.Start, transport.outbound()))
 
-    override fun stop() = transport.send(SourceProtocol.encode(SourceProtocol.Frame.Stop))
+    override fun stop() = transport.send(SourceProtocol.encode(SourceProtocol.Frame.Stop, transport.outbound()))
 
     override fun close() {
         stop()
@@ -72,7 +72,7 @@ class RemoteMessageSource(
     }
 
     private fun onFrame(bytes: ByteArray) {
-        when (val frame = SourceProtocol.decode(bytes)) {
+        when (val frame = SourceProtocol.decode(bytes, transport.inbound())) {
             is SourceProtocol.Frame.Event -> sink?.emit(frame.event)
             is SourceProtocol.Frame.CallResult -> pendingCalls.remove(frame.id)?.complete(frame.value)
             is SourceProtocol.Frame.Describe -> {

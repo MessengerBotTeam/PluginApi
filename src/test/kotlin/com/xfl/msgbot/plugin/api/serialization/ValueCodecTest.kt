@@ -61,10 +61,50 @@ class ValueCodecTest {
     }
 
     @Test
-    fun nonInlineBlobDegradesToRef() {
-        val blob = Blob(5L, 100L, "application/octet-stream", Blob.Transport.Shm(3L, 0L, 100L))
+    fun shmBlobKeepsItsDescriptor() {
+        val blob = Blob(5L, 100L, "application/octet-stream", Blob.Transport.Shm(3L, 8L, 100L))
         val decoded = (roundTrip(Value.VBlob(blob)) as Value.VBlob).blob
         assertEquals(5L, decoded.id)
+        val t = decoded.transport
+        assertIs<Blob.Transport.Shm>(t)
+        assertEquals(3L, t.id)
+        assertEquals(8L, t.offset)
+        assertEquals(100L, t.length)
+    }
+
+    @Test
+    fun unsupportedTransportDegradesToRef() {
+        val blob = Blob(5L, 100L, "application/octet-stream", Blob.Transport.Pipe(3L))
+        val decoded = (roundTrip(Value.VBlob(blob)) as Value.VBlob).blob
         assertIs<Blob.Transport.FileRef>(decoded.transport)
+    }
+
+    @Test
+    fun blobHookMovesBytesOutOfTheFrameAndBack() {
+        val bytes = ByteArray(4096) { it.toByte() }
+        val stash = HashMap<Long, ByteArray>()
+        val out =
+            ValueCodec.BlobHook { blob ->
+                val t = blob.transport
+                if (t !is Blob.Transport.Inline) {
+                    blob
+                } else {
+                    stash[blob.id] = t.bytes
+                    Blob(blob.id, blob.size, blob.mime, Blob.Transport.Shm(blob.id, 0L, blob.size))
+                }
+            }
+        val back =
+            ValueCodec.BlobHook { blob ->
+                val t = blob.transport
+                if (t !is Blob.Transport.Shm) blob else Blob.ofInline(blob.id, stash.getValue(t.id), blob.mime)
+            }
+
+        val encoded = ValueCodec.encode(Value.VBlob(Blob.ofInline(7L, bytes, "image/png")), out)
+        // The point of the hook: the payload no longer rides in the frame.
+        assertTrue(encoded.size < 256)
+
+        val decoded = (ValueCodec.decode(encoded, back) as Value.VBlob).blob
+        assertContentEquals(bytes, (decoded.transport as Blob.Transport.Inline).bytes)
+        assertEquals("image/png", decoded.mime)
     }
 }

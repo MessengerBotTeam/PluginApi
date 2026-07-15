@@ -40,18 +40,18 @@ class RemoteScriptEngine(
     }
 
     override fun load(apiLevel: String, capabilities: List<String>, shim: String, userScript: String) {
-        transport.send(PluginProtocol.encode(PluginProtocol.Frame.Load(apiLevel, capabilities, shim, userScript)))
+        transport.send(PluginProtocol.encode(PluginProtocol.Frame.Load(apiLevel, capabilities, shim, userScript), transport.outbound()))
     }
 
     override fun dispatch(event: Value.VObject) {
-        transport.send(PluginProtocol.encode(PluginProtocol.Frame.Dispatch(event)))
+        transport.send(PluginProtocol.encode(PluginProtocol.Frame.Dispatch(event), transport.outbound()))
     }
 
     override fun eval(source: String): Value {
         val id = evalSeq.incrementAndGet()
         val future = CompletableFuture<Value>()
         pendingEvals[id] = future
-        transport.send(PluginProtocol.encode(PluginProtocol.Frame.Eval(id, source)))
+        transport.send(PluginProtocol.encode(PluginProtocol.Frame.Eval(id, source), transport.outbound()))
         return try {
             future.get(callTimeoutMs, TimeUnit.MILLISECONDS)
         } finally {
@@ -60,15 +60,15 @@ class RemoteScriptEngine(
     }
 
     override fun close() {
-        transport.send(PluginProtocol.encode(PluginProtocol.Frame.Close))
+        transport.send(PluginProtocol.encode(PluginProtocol.Frame.Close, transport.outbound()))
         transport.close()
     }
 
     private fun onFrame(bytes: ByteArray) {
-        when (val frame = PluginProtocol.decode(bytes)) {
+        when (val frame = PluginProtocol.decode(bytes, transport.inbound())) {
             is PluginProtocol.Frame.HostCall -> {
                 val result = hostBridge?.call(frame.method, frame.args) ?: Value.VNull
-                transport.send(PluginProtocol.encode(PluginProtocol.Frame.Result(frame.id, result)))
+                transport.send(PluginProtocol.encode(PluginProtocol.Frame.Result(frame.id, result), transport.outbound()))
             }
             is PluginProtocol.Frame.EvalResult -> pendingEvals.remove(frame.id)?.complete(frame.value)
             else -> Unit // Load/Dispatch/Eval/Close/Result are inbound only on the plugin side

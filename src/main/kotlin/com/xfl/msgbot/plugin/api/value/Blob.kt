@@ -21,13 +21,15 @@ class Blob(
     val transport: Transport,
 ) {
     /**
-     * Where the bytes actually travel. Phase 1 uses [Inline] only; the others are defined now
-     * so Phase 2 (separate process) needs no signature change. FDs are abstracted as Long so
-     * this module stays Android-free.
+     * Where the bytes actually travel.
+     *
+     * [Shm.id] is a correlation id, not an fd: a control frame is a byte array and cannot carry
+     * one, so the shared region is handed over out-of-band by the transport and paired up by id.
+     * Keeping it a Long is also what keeps this module Android-free.
      */
     sealed interface Transport {
         class Inline(val bytes: ByteArray) : Transport
-        class Shm(val fd: Long, val offset: Long, val length: Long) : Transport
+        class Shm(val id: Long, val offset: Long, val length: Long) : Transport
         class Pipe(val fd: Long) : Transport
         class FileRef(val handle: Long) : Transport
     }

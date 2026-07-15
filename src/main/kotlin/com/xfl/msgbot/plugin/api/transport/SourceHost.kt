@@ -28,20 +28,20 @@ class SourceHost(
         executor.submit {
             source = sourceFactory()
             source.bindSink { event ->
-                transport.send(SourceProtocol.encode(SourceProtocol.Frame.Event(event)))
+                transport.send(SourceProtocol.encode(SourceProtocol.Frame.Event(event), transport.outbound()))
             }
             val d = source.descriptor
-            transport.send(SourceProtocol.encode(SourceProtocol.Frame.Describe(d.sourceId, d.displayName, d.capabilities)))
+            transport.send(SourceProtocol.encode(SourceProtocol.Frame.Describe(d.sourceId, d.displayName, d.capabilities), transport.outbound()))
         }
     }
 
     private fun onFrame(bytes: ByteArray) {
-        when (val frame = SourceProtocol.decode(bytes)) {
+        when (val frame = SourceProtocol.decode(bytes, transport.inbound())) {
             is SourceProtocol.Frame.Start -> executor.submit { source.start() }
             is SourceProtocol.Frame.Stop -> executor.submit { source.stop() }
             is SourceProtocol.Frame.Call -> executor.submit {
                 val result = runCatching { source.call(frame.method, frame.args) }.getOrElse { com.xfl.msgbot.plugin.api.value.Value.VNull }
-                transport.send(SourceProtocol.encode(SourceProtocol.Frame.CallResult(frame.id, result)))
+                transport.send(SourceProtocol.encode(SourceProtocol.Frame.CallResult(frame.id, result), transport.outbound()))
             }
             else -> Unit // Event/CallResult/Describe are source-to-host only
         }
