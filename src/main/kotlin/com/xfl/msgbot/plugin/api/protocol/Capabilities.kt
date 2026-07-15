@@ -43,7 +43,4 @@ object Capabilities {
     // Timers (host-scheduled; fire back a TIMER event)
     const val TIMER_SET = "timerSet" // (timerId, delayMs, repeat) -> VNull
     const val TIMER_CLEAR = "timerClear" // (timerId) -> VNull
-
-    // Reserved (Phase 2)
-    const val MEDIA_SEND = "mediaSend"
 }

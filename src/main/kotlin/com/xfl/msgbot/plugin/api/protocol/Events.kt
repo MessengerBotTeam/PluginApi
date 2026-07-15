@@ -24,7 +24,6 @@ object Events {
     const val NOTIFICATION_POSTED = "notificationPosted"
     const val NOTIFICATION_REMOVED = "notificationRemoved"
     const val START_COMPILE = "startCompile"
-    const val TICK = "tick"
     const val TIMER = "timer"
 
     /** TIMER event payload key. */
