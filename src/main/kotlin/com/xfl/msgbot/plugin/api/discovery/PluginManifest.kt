@@ -36,6 +36,14 @@ data class PluginManifest(
         /** Signature-level permission guarding the plugin service (host signing key). */
         const val PLUGIN_PERMISSION = "com.xfl.msgbot.permission.PLUGIN"
 
+        /**
+         * Name to show the user, declared with `android:resource` (not `android:value`) so it is a
+         * string resource the host resolves against the plugin's own resources: Android then picks
+         * the right translation, and the host can resolve it in whatever language the user chose
+         * for the app rather than the plugin's idea of it. Falls back to the app label.
+         */
+        const val META_DISPLAY_NAME = "com.xfl.msgbot.plugin.displayName"
+
         // <meta-data> keys a plugin service declares in its manifest.
         const val META_ENGINE_ID = "com.xfl.msgbot.plugin.engineId"
         const val META_LANGUAGES = "com.xfl.msgbot.plugin.languages"
