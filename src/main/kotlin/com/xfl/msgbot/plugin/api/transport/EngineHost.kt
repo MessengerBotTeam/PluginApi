@@ -31,7 +31,7 @@ class EngineHost(
      * (i.e. the host has no shim for this plugin's language). Returning null means "no shim".
      */
     private val shimProvider: (apiLevel: String) -> String? = { null },
-) {
+) : AutoCloseable {
     private val engineExecutor = Executors.newSingleThreadExecutor { r -> Thread(r, "plugin-engine") }
     private val callSeq = AtomicLong(0)
     private val pendingCalls = ConcurrentHashMap<Long, CompletableFuture<Value>>()
@@ -71,13 +71,19 @@ class EngineHost(
                 val result = engine.eval(frame.source)
                 transport.send(PluginProtocol.encode(PluginProtocol.Frame.EvalResult(frame.id, result), transport.outbound()))
             }
-            is PluginProtocol.Frame.Close -> engineExecutor.submit {
-                engine.close()
-                engineExecutor.shutdown()
-                transport.close()
-            }
+            is PluginProtocol.Frame.Close -> close()
             is PluginProtocol.Frame.Result -> pendingCalls.remove(frame.id)?.complete(frame.value)
             else -> Unit // HostCall/EvalResult are outbound only from the plugin side
         }
+    }
+
+    /**
+     * Tears the engine down. A host that dies never sends Close, so a plugin that outlives it must
+     * be able to do this itself; otherwise a whole runtime leaks on every reconnect.
+     */
+    override fun close() {
+        engineExecutor.submit { runCatching { engine.close() } }
+        engineExecutor.shutdown()
+        transport.close()
     }
 }

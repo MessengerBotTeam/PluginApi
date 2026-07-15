@@ -18,7 +18,7 @@ import java.util.concurrent.Executors
 class SourceHost(
     private val transport: PluginTransport,
     sourceFactory: () -> MessageSource,
-) {
+) : AutoCloseable {
     private val executor = Executors.newSingleThreadExecutor { r -> Thread(r, "plugin-source") }
 
     @Volatile private lateinit var source: MessageSource
@@ -45,5 +45,16 @@ class SourceHost(
             }
             else -> Unit // Event/CallResult/Describe are source-to-host only
         }
+    }
+
+    /**
+     * Tears the source down. A host that dies never sends Stop, so a plugin that outlives it must
+     * be able to do this itself; otherwise the old source keeps running (and keeps emitting) while
+     * a reconnecting host builds a second one.
+     */
+    override fun close() {
+        executor.submit { runCatching { source.stop() } }
+        executor.shutdown()
+        transport.close()
     }
 }
