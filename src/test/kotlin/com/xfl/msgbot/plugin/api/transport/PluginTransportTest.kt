@@ -22,7 +22,11 @@ class PluginTransportTest {
         private var bridge: HostBridge? = null
 
         override fun bindHost(bridge: HostBridge) { this.bridge = bridge }
-        override fun load(apiLevel: String, shim: String, userScript: String) = Unit
+        var loadedCaps: List<String>? = null
+
+        override fun load(apiLevel: String, capabilities: List<String>, shim: String, userScript: String) {
+            loadedCaps = capabilities
+        }
         override fun dispatch(event: Value.VObject) {
             val token = (event.entries["replyToken"] as? Value.VString)?.value ?: ""
             val content = (event.entries["content"] as? Value.VString)?.value ?: ""
@@ -51,7 +55,7 @@ class PluginTransportTest {
         host.bindHost(hostBridge)
         EngineHost(pluginT, { FakeEngine() })
 
-        host.load("API2", "<shim>", "<script>")
+        host.load("API2", listOf("reply"), "<shim>", "<script>")
         host.dispatch(
             Value.VObject(
                 mapOf(
@@ -64,6 +68,23 @@ class PluginTransportTest {
 
         assertTrue(latch.await(5, TimeUnit.SECONDS), "reply capability should be called over the transport")
         assertTrue(calls.contains("tok-1" to "pong:hi"))
+        host.close()
+    }
+
+    @Test
+    fun `capabilities reach a plugin that supplies its own shim`() {
+        val (hostT, pluginT) = LoopbackTransport.pair()
+        val engine = FakeEngine()
+        val host = RemoteScriptEngine(hostT, EngineDescriptor("remote", "Remote", listOf("lua")))
+        // Empty shim: the host has none for this language, so the plugin falls back to its own.
+        // Capabilities must still arrive, otherwise that shim cannot gate its API surface.
+        EngineHost(pluginT, { engine }, shimProvider = { "-- own shim" })
+
+        host.load("API2", listOf("reply", "log"), "", "<script>")
+
+        val deadline = System.currentTimeMillis() + 5_000
+        while (engine.loadedCaps == null && System.currentTimeMillis() < deadline) Thread.sleep(10)
+        assertEquals(listOf("reply", "log"), engine.loadedCaps)
         host.close()
     }
 

@@ -25,11 +25,16 @@ interface ScriptEngine : AutoCloseable {
     /**
      * Evaluate the shim then the user script, making the engine ready to receive events.
      *
+     * [capabilities] are the host methods that actually work for this project; the engine must
+     * expose them to the script as a global `__caps` before evaluating [shim], so the shim can
+     * gate its API surface. It is passed as data rather than as generated source because only the
+     * engine knows how to spell a global in its own language.
+     *
      * [shim] may be empty, meaning the host has no shim for this engine's language: the engine
      * must then supply its own shim for [apiLevel]. This is what lets a new language ship as a
      * self-contained plugin (its shim is language-specific code, so it belongs with the plugin).
      */
-    fun load(apiLevel: String, shim: String, userScript: String)
+    fun load(apiLevel: String, capabilities: List<String>, shim: String, userScript: String)
 
     /** Evaluate arbitrary source (mainly for tests/REPL). */
     fun eval(source: String): Value

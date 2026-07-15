@@ -23,6 +23,7 @@ object PluginProtocol {
     private const val VALUE = "v"
     private const val SHIM = "s"
     private const val SCRIPT = "c"
+    private const val CAPS = "p"
 
     private const val K_LOAD = 1L
     private const val K_DISPATCH = 2L
@@ -34,7 +35,12 @@ object PluginProtocol {
 
     sealed interface Frame {
         /** [shim] empty => the plugin supplies its own shim for [apiLevel]. */
-        data class Load(val apiLevel: String, val shim: String, val userScript: String) : Frame
+        data class Load(
+            val apiLevel: String,
+            val capabilities: List<String>,
+            val shim: String,
+            val userScript: String,
+        ) : Frame
         data class Dispatch(val event: Value.VObject) : Frame
         object Close : Frame
         data class HostCall(val id: Long, val method: String, val args: List<Value>) : Frame
@@ -49,7 +55,14 @@ object PluginProtocol {
 
     private fun toValue(frame: Frame): Value =
         when (frame) {
-            is Frame.Load -> obj(K_LOAD, ID to str(frame.apiLevel), SHIM to str(frame.shim), SCRIPT to str(frame.userScript))
+            is Frame.Load ->
+                obj(
+                    K_LOAD,
+                    ID to str(frame.apiLevel),
+                    CAPS to Value.VArray(frame.capabilities.map(::str)),
+                    SHIM to str(frame.shim),
+                    SCRIPT to str(frame.userScript),
+                )
             is Frame.Dispatch -> obj(K_DISPATCH, VALUE to frame.event)
             is Frame.Close -> obj(K_CLOSE)
             is Frame.HostCall -> obj(K_HOST_CALL, ID to int(frame.id), METHOD to str(frame.method), ARGS to Value.VArray(frame.args))
@@ -61,7 +74,13 @@ object PluginProtocol {
     private fun fromValue(value: Value): Frame {
         val map = (value as Value.VObject).entries
         return when ((map.getValue(KIND) as Value.VInt).value) {
-            K_LOAD -> Frame.Load(strOf(map, ID), strOf(map, SHIM), strOf(map, SCRIPT))
+            K_LOAD ->
+                Frame.Load(
+                    strOf(map, ID),
+                    (map.getValue(CAPS) as Value.VArray).items.map { (it as Value.VString).value },
+                    strOf(map, SHIM),
+                    strOf(map, SCRIPT),
+                )
             K_DISPATCH -> Frame.Dispatch(map.getValue(VALUE) as Value.VObject)
             K_CLOSE -> Frame.Close
             K_HOST_CALL -> Frame.HostCall(intOf(map, ID), strOf(map, METHOD), (map.getValue(ARGS) as Value.VArray).items)

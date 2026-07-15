@@ -39,8 +39,8 @@ class RemoteScriptEngine(
         hostBridge = bridge
     }
 
-    override fun load(apiLevel: String, shim: String, userScript: String) {
-        transport.send(PluginProtocol.encode(PluginProtocol.Frame.Load(apiLevel, shim, userScript)))
+    override fun load(apiLevel: String, capabilities: List<String>, shim: String, userScript: String) {
+        transport.send(PluginProtocol.encode(PluginProtocol.Frame.Load(apiLevel, capabilities, shim, userScript)))
     }
 
     override fun dispatch(event: Value.VObject) {

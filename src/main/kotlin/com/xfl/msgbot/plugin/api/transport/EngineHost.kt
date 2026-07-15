@@ -64,7 +64,7 @@ class EngineHost(
             is PluginProtocol.Frame.Load -> engineExecutor.submit {
                 // Empty shim => the host has none for our language; fall back to our own.
                 val shim = frame.shim.ifEmpty { shimProvider(frame.apiLevel).orEmpty() }
-                engine.load(frame.apiLevel, shim, frame.userScript)
+                engine.load(frame.apiLevel, frame.capabilities, shim, frame.userScript)
             }
             is PluginProtocol.Frame.Dispatch -> engineExecutor.submit { engine.dispatch(frame.event) }
             is PluginProtocol.Frame.Eval -> engineExecutor.submit {

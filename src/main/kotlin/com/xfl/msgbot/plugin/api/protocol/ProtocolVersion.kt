@@ -7,10 +7,14 @@ package com.xfl.msgbot.plugin.api.protocol
 
 /** Capability contract version, negotiated at the Phase 2 handshake. Bump on breaking changes. */
 object ProtocolVersion {
-    const val CURRENT: Int = 1
+    /** 2: Load carries the negotiated capability list. */
+    const val CURRENT: Int = 2
 
-    /** Oldest plugin protocol this host still accepts. Widen instead of bumping CURRENT lockstep. */
-    const val MIN_SUPPORTED: Int = 1
+    /**
+     * Oldest plugin protocol this host still accepts. Widen instead of bumping CURRENT lockstep.
+     * 1 is not accepted: its Load frame has no capability list, so a v1 plugin cannot decode ours.
+     */
+    const val MIN_SUPPORTED: Int = 2
 
     /** Range check: a plugin is loadable when its protocol falls in [MIN_SUPPORTED, CURRENT]. */
     fun isCompatible(pluginProtocol: Int): Boolean = pluginProtocol in MIN_SUPPORTED..CURRENT
