@@ -27,6 +27,12 @@ data class PluginManifest(
     companion object {
         const val PLUGIN_SERVICE_ACTION = "com.xfl.msgbot.plugin.ENGINE"
 
+        /** Message source plugins advertise this instead; same transport, opposite direction. */
+        const val SOURCE_SERVICE_ACTION = "com.xfl.msgbot.plugin.SOURCE"
+
+        /** Source identity, the open string a project points at (mirrors engineId). */
+        const val META_SOURCE_ID = "com.xfl.msgbot.plugin.sourceId"
+
         /** Signature-level permission guarding the plugin service (host signing key). */
         const val PLUGIN_PERMISSION = "com.xfl.msgbot.permission.PLUGIN"
 

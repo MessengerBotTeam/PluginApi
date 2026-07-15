@@ -12,6 +12,13 @@ package com.xfl.msgbot.plugin.api.protocol
 object Events {
     const val TYPE = "type"
 
+    /**
+     * Which source produced this event. The host stamps it on arrival and delivers the event only
+     * to projects using that source, so two bots on different messengers never see each other's
+     * traffic. Scripts do not read it: a script is written against a source, not aware of it.
+     */
+    const val SOURCE_ID = "sourceId"
+
     const val MESSAGE = "message"
     const val COMMAND = "command"
     const val NOTIFICATION_POSTED = "notificationPosted"
