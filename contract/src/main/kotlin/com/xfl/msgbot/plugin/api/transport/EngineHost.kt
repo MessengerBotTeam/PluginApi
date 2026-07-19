@@ -64,8 +64,12 @@ class EngineHost(
     init {
         transport.setListener(::onFrame)
         engineExecutor.submit {
-            engine = engineFactory()
-            engine.bindHost(proxyBridge)
+            // submit files a throw in a Future nobody reads; a runtime that cannot even start
+            // (a missing native lib, say) must not vanish into it.
+            report("engine init") {
+                engine = engineFactory()
+                engine.bindHost(proxyBridge)
+            }
         }
     }
 

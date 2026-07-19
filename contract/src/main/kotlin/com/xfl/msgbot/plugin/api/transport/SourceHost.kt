@@ -59,7 +59,9 @@ class SourceHost(
 
     /** A host that dies never sends Stop, so the plugin must be able to do this itself. */
     override fun close() {
-        executor.submit { runCatching { source.stop() } }
+        // close(), not stop(): this endpoint is going away, so whatever the source holds beyond
+        // "not emitting" must be released with it.
+        executor.submit { runCatching { source.close() } }
         executor.shutdown()
         transport.close()
     }
