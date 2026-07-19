@@ -16,8 +16,9 @@ import com.xfl.msgbot.plugin.api.value.Value
  * over IPC the caller blocks while the host services the call on a separate worker thread.
  *
  * @param method one of [com.xfl.msgbot.plugin.api.protocol.Capabilities].
- * @return the capability result, or [Value.VNull].
+ * @return the value, or why there is none. An implementation should not throw: a failure it knows
+ *   about is a [CallResult.Err], which is the one the script can be told about.
  */
 fun interface HostBridge {
-    fun call(method: String, args: List<Value>): Value
+    fun call(method: String, args: List<Value>): CallResult
 }

@@ -6,6 +6,7 @@
 package com.xfl.msgbot.plugin.api.transport
 
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 
 /**
  * In-process [PluginTransport] pair for testing the protocol end-to-end (still crossing the
@@ -30,7 +31,14 @@ class LoopbackTransport private constructor(name: String) : PluginTransport {
     }
 
     private fun deliver(frame: ByteArray) {
-        delivery.submit { listener?.invoke(frame) }
+        // The peer may have closed between send and here; its delivery thread is gone and there is
+        // nothing to hand the frame to. Real transports drop a frame the far end can no longer
+        // receive rather than throwing back into the sender, so this does too.
+        try {
+            delivery.submit { listener?.invoke(frame) }
+        } catch (_: RejectedExecutionException) {
+            // Closed; nothing to deliver to.
+        }
     }
 
     companion object {

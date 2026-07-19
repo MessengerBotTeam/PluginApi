@@ -5,13 +5,15 @@
 
 package com.xfl.msgbot.plugin.api.transport
 
+import com.xfl.msgbot.plugin.api.bridge.CallResult
 import com.xfl.msgbot.plugin.api.bridge.HostBridge
 import com.xfl.msgbot.plugin.api.engine.ScriptEngine
-import com.xfl.msgbot.plugin.api.value.Value
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -27,25 +29,33 @@ class EngineHost(
     engineFactory: () -> ScriptEngine,
     private val callTimeoutMs: Long = 30_000,
     /**
-     * Supplies this plugin's own shim for an apiLevel, used when the host sends an empty shim
-     * (i.e. the host has no shim for this plugin's language). Returning null means "no shim".
+     * This plugin's own shim, used when the host sends an empty one. Null means "no shim".
      */
-    private val shimProvider: (apiLevel: String) -> String? = { null },
+    private val shimProvider: (language: String, apiLevel: String) -> String? = { _, _ -> null },
+    /** Told when one-way work (load/dispatch) fails; the exception has nowhere else to surface. */
+    private val onError: (String) -> Unit = {},
 ) : AutoCloseable {
     private val engineExecutor = Executors.newSingleThreadExecutor { r -> Thread(r, "plugin-engine") }
     private val callSeq = AtomicLong(0)
-    private val pendingCalls = ConcurrentHashMap<Long, CompletableFuture<Value>>()
+    private val pendingCalls = ConcurrentHashMap<Long, CompletableFuture<CallResult>>()
+    private val closed = AtomicBoolean(false)
 
     @Volatile private lateinit var engine: ScriptEngine
 
     private val proxyBridge =
         HostBridge { method, args ->
             val id = callSeq.incrementAndGet()
-            val future = CompletableFuture<Value>()
+            val future = CompletableFuture<CallResult>()
             pendingCalls[id] = future
             transport.send(PluginProtocol.encode(PluginProtocol.Frame.HostCall(id, method, args), transport.outbound()))
             try {
                 future.get(callTimeoutMs, TimeUnit.MILLISECONDS)
+            } catch (e: InterruptedException) {
+                // Shutdown, not a timeout; restore the flag that tells the engine thread to stop.
+                Thread.currentThread().interrupt()
+                CallResult.failed("'$method' was cancelled while the engine was shutting down")
+            } catch (e: Exception) {
+                CallResult.failed("The host did not answer '$method' within ${callTimeoutMs}ms")
             } finally {
                 pendingCalls.remove(id)
             }
@@ -60,28 +70,63 @@ class EngineHost(
     }
 
     private fun onFrame(bytes: ByteArray) {
+        // A late frame after close() has no engine left; letting it reach the shut-down executor
+        // would throw out of a binder callback and crash the process.
+        if (closed.get()) return
         when (val frame = PluginProtocol.decode(bytes, transport.inbound())) {
-            is PluginProtocol.Frame.Load -> engineExecutor.submit {
-                // Empty shim => the host has none for our language; fall back to our own.
-                val shim = frame.shim.ifEmpty { shimProvider(frame.apiLevel).orEmpty() }
-                engine.load(frame.apiLevel, frame.capabilities, shim, frame.userScript)
+            is PluginProtocol.Frame.Load -> runOnEngine {
+                report("load ${frame.language}/${frame.apiLevel}") {
+                    // Empty shim => the host has none for this language; fall back to our own.
+                    val shim = frame.shim.ifEmpty { shimProvider(frame.language, frame.apiLevel).orEmpty() }
+                    engine.load(frame.language, frame.apiLevel, frame.capabilities, shim, frame.userScript, frame.options)
+                }
             }
-            is PluginProtocol.Frame.Dispatch -> engineExecutor.submit { engine.dispatch(frame.event) }
-            is PluginProtocol.Frame.Eval -> engineExecutor.submit {
-                val result = engine.eval(frame.source)
-                transport.send(PluginProtocol.encode(PluginProtocol.Frame.EvalResult(frame.id, result), transport.outbound()))
+            is PluginProtocol.Frame.Dispatch -> runOnEngine {
+                report("dispatch") { engine.dispatch(frame.event) }
+            }
+            is PluginProtocol.Frame.Eval -> runOnEngine {
+                // The caller is blocked on this, so a throw must come back as an answer.
+                val answer =
+                    try {
+                        CallResult.of(engine.eval(frame.source))
+                    } catch (e: Exception) {
+                        CallResult.failed(e.message ?: e.javaClass.simpleName)
+                    }
+                transport.send(PluginProtocol.encode(PluginProtocol.Frame.EvalResult(frame.id, answer), transport.outbound()))
             }
             is PluginProtocol.Frame.Close -> close()
-            is PluginProtocol.Frame.Result -> pendingCalls.remove(frame.id)?.complete(frame.value)
+            is PluginProtocol.Frame.Result -> pendingCalls.remove(frame.id)?.complete(frame.result)
             else -> Unit // HostCall/EvalResult are outbound only from the plugin side
         }
     }
 
+    /** Hands work to the engine thread, tolerating a frame that raced [close]. */
+    private fun runOnEngine(block: () -> Unit) {
+        try {
+            engineExecutor.submit(block)
+        } catch (_: RejectedExecutionException) {
+            // Closed underneath us; nothing to run it against.
+        }
+    }
+
+    /** One-way work: `submit` files exceptions in a Future nobody reads, so report them here. */
+    private inline fun report(
+        what: String,
+        block: () -> Unit,
+    ) {
+        try {
+            block()
+        } catch (e: Exception) {
+            onError("$what failed: ${e.message ?: e.javaClass.simpleName}")
+        }
+    }
+
     /**
-     * Tears the engine down. A host that dies never sends Close, so a plugin that outlives it must
-     * be able to do this itself; otherwise a whole runtime leaks on every reconnect.
+     * A host that dies never sends Close, so the plugin must be able to do this itself. Closing
+     * twice is the normal path: once for the Close frame, once for the service being destroyed.
      */
     override fun close() {
+        if (!closed.compareAndSet(false, true)) return
         engineExecutor.submit { runCatching { engine.close() } }
         engineExecutor.shutdown()
         transport.close()

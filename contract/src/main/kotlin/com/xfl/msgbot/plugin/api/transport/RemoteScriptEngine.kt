@@ -5,6 +5,7 @@
 
 package com.xfl.msgbot.plugin.api.transport
 
+import com.xfl.msgbot.plugin.api.bridge.CallResult
 import com.xfl.msgbot.plugin.api.bridge.HostBridge
 import com.xfl.msgbot.plugin.api.engine.EngineDescriptor
 import com.xfl.msgbot.plugin.api.engine.ScriptEngine
@@ -29,7 +30,7 @@ class RemoteScriptEngine(
 ) : ScriptEngine {
     private var hostBridge: HostBridge? = null
     private val evalSeq = AtomicLong(0)
-    private val pendingEvals = ConcurrentHashMap<Long, CompletableFuture<Value>>()
+    private val pendingEvals = ConcurrentHashMap<Long, CompletableFuture<CallResult>>()
 
     init {
         transport.setListener(::onFrame)
@@ -39,23 +40,37 @@ class RemoteScriptEngine(
         hostBridge = bridge
     }
 
-    override fun load(apiLevel: String, capabilities: List<String>, shim: String, userScript: String) {
-        transport.send(PluginProtocol.encode(PluginProtocol.Frame.Load(apiLevel, capabilities, shim, userScript), transport.outbound()))
+    override fun load(
+        language: String,
+        apiLevel: String,
+        capabilities: List<String>,
+        shim: String,
+        userScript: String,
+        options: Map<String, String>,
+    ) {
+        val frame = PluginProtocol.Frame.Load(language, apiLevel, capabilities, shim, userScript, options)
+        transport.send(PluginProtocol.encode(frame, transport.outbound()))
     }
 
     override fun dispatch(event: Value.VObject) {
         transport.send(PluginProtocol.encode(PluginProtocol.Frame.Dispatch(event), transport.outbound()))
     }
 
+    /** @throws IllegalStateException with what the engine said. */
     override fun eval(source: String): Value {
         val id = evalSeq.incrementAndGet()
-        val future = CompletableFuture<Value>()
+        val future = CompletableFuture<CallResult>()
         pendingEvals[id] = future
         transport.send(PluginProtocol.encode(PluginProtocol.Frame.Eval(id, source), transport.outbound()))
-        return try {
-            future.get(callTimeoutMs, TimeUnit.MILLISECONDS)
-        } finally {
-            pendingEvals.remove(id)
+        val result =
+            try {
+                future.get(callTimeoutMs, TimeUnit.MILLISECONDS)
+            } finally {
+                pendingEvals.remove(id)
+            }
+        return when (result) {
+            is CallResult.Ok -> result.value
+            is CallResult.Err -> throw IllegalStateException("eval failed: ${result.message}")
         }
     }
 
@@ -67,11 +82,25 @@ class RemoteScriptEngine(
     private fun onFrame(bytes: ByteArray) {
         when (val frame = PluginProtocol.decode(bytes, transport.inbound())) {
             is PluginProtocol.Frame.HostCall -> {
-                val result = hostBridge?.call(frame.method, frame.args) ?: Value.VNull
+                // No bridge is the host's own bug; "no such capability" would blame the script.
+                val result =
+                    hostBridge?.let { serve(it, frame) }
+                        ?: CallResult.failed("The host is not ready to answer '${frame.method}'")
                 transport.send(PluginProtocol.encode(PluginProtocol.Frame.Result(frame.id, result), transport.outbound()))
             }
-            is PluginProtocol.Frame.EvalResult -> pendingEvals.remove(frame.id)?.complete(frame.value)
+            is PluginProtocol.Frame.EvalResult -> pendingEvals.remove(frame.id)?.complete(frame.result)
             else -> Unit // Load/Dispatch/Eval/Close/Result are inbound only on the plugin side
         }
     }
+
+    /** Nothing else sends the Result frame, so even a throwing bridge must be turned into one. */
+    private fun serve(
+        bridge: HostBridge,
+        frame: PluginProtocol.Frame.HostCall,
+    ): CallResult =
+        try {
+            bridge.call(frame.method, frame.args)
+        } catch (e: Exception) {
+            CallResult.failed("Capability '${frame.method}' failed: ${e.message ?: e.javaClass.simpleName}")
+        }
 }
