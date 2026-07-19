@@ -5,6 +5,7 @@
 
 package com.xfl.msgbot.plugin.api.transport
 
+import com.xfl.msgbot.plugin.api.bridge.CallResult
 import com.xfl.msgbot.plugin.api.serialization.ValueCodec
 import com.xfl.msgbot.plugin.api.value.Value
 
@@ -16,14 +17,12 @@ import com.xfl.msgbot.plugin.api.value.Value
  * ([Frame.Result] answers a HostCall; [Frame.EvalResult] answers an Eval.)
  */
 object PluginProtocol {
-    private const val KIND = "k"
-    private const val ID = "id"
-    private const val METHOD = "m"
-    private const val ARGS = "a"
-    private const val VALUE = "v"
     private const val SHIM = "s"
     private const val SCRIPT = "c"
     private const val CAPS = "p"
+    private const val LANGUAGE = "l"
+    private const val API_LEVEL = "al"
+    private const val OPTIONS = "o"
 
     private const val K_LOAD = 1L
     private const val K_DISPATCH = 2L
@@ -36,17 +35,25 @@ object PluginProtocol {
     sealed interface Frame {
         /** [shim] empty => the plugin supplies its own shim for [apiLevel]. */
         data class Load(
+            /** Which language [userScript] is written in; a polyglot engine cannot infer it. */
+            val language: String,
             val apiLevel: String,
             val capabilities: List<String>,
             val shim: String,
             val userScript: String,
+            /** Per-project settings the engine declared; the host carries them without reading them. */
+            val options: Map<String, String> = emptyMap(),
         ) : Frame
         data class Dispatch(val event: Value.VObject) : Frame
         object Close : Frame
         data class HostCall(val id: Long, val method: String, val args: List<Value>) : Frame
-        data class Result(val id: Long, val value: Value) : Frame
+
+        /** Answers a [HostCall] with what the capability produced, or with why it produced nothing. */
+        data class Result(val id: Long, val result: CallResult) : Frame
         data class Eval(val id: Long, val source: String) : Frame
-        data class EvalResult(val id: Long, val value: Value) : Frame
+
+        /** Answers an [Eval] with what it produced, or with why it produced nothing. */
+        data class EvalResult(val id: Long, val result: CallResult) : Frame
     }
 
     fun encode(frame: Frame, onBlob: ValueCodec.BlobHook = ValueCodec.BlobHook { it }): ByteArray =
@@ -56,48 +63,48 @@ object PluginProtocol {
         fromValue(ValueCodec.decode(bytes, onBlob))
 
     private fun toValue(frame: Frame): Value =
-        when (frame) {
-            is Frame.Load ->
-                obj(
-                    K_LOAD,
-                    ID to str(frame.apiLevel),
-                    CAPS to Value.VArray(frame.capabilities.map(::str)),
-                    SHIM to str(frame.shim),
-                    SCRIPT to str(frame.userScript),
-                )
-            is Frame.Dispatch -> obj(K_DISPATCH, VALUE to frame.event)
-            is Frame.Close -> obj(K_CLOSE)
-            is Frame.HostCall -> obj(K_HOST_CALL, ID to int(frame.id), METHOD to str(frame.method), ARGS to Value.VArray(frame.args))
-            is Frame.Result -> obj(K_RESULT, ID to int(frame.id), VALUE to frame.value)
-            is Frame.Eval -> obj(K_EVAL, ID to int(frame.id), SCRIPT to str(frame.source))
-            is Frame.EvalResult -> obj(K_EVAL_RESULT, ID to int(frame.id), VALUE to frame.value)
+        with(FrameCodec) {
+            when (frame) {
+                is Frame.Load ->
+                    obj(
+                        K_LOAD,
+                        LANGUAGE to str(frame.language),
+                        API_LEVEL to str(frame.apiLevel),
+                        CAPS to strs(frame.capabilities),
+                        SHIM to str(frame.shim),
+                        SCRIPT to str(frame.userScript),
+                        OPTIONS to Value.VObject(frame.options.mapValues { (_, v) -> str(v) }),
+                    )
+                is Frame.Dispatch -> obj(K_DISPATCH, VALUE to frame.event)
+                is Frame.Close -> obj(K_CLOSE)
+                is Frame.HostCall -> obj(K_HOST_CALL, ID to int(frame.id), METHOD to str(frame.method), ARGS to Value.VArray(frame.args))
+                is Frame.Result -> obj(K_RESULT, ID to int(frame.id), *resultFields(frame.result))
+                is Frame.Eval -> obj(K_EVAL, ID to int(frame.id), SCRIPT to str(frame.source))
+                is Frame.EvalResult -> obj(K_EVAL_RESULT, ID to int(frame.id), *resultFields(frame.result))
+            }
         }
 
     private fun fromValue(value: Value): Frame {
         val map = (value as Value.VObject).entries
-        return when ((map.getValue(KIND) as Value.VInt).value) {
-            K_LOAD ->
-                Frame.Load(
-                    strOf(map, ID),
-                    (map.getValue(CAPS) as Value.VArray).items.map { (it as Value.VString).value },
-                    strOf(map, SHIM),
-                    strOf(map, SCRIPT),
-                )
-            K_DISPATCH -> Frame.Dispatch(map.getValue(VALUE) as Value.VObject)
-            K_CLOSE -> Frame.Close
-            K_HOST_CALL -> Frame.HostCall(intOf(map, ID), strOf(map, METHOD), (map.getValue(ARGS) as Value.VArray).items)
-            K_RESULT -> Frame.Result(intOf(map, ID), map.getValue(VALUE))
-            K_EVAL -> Frame.Eval(intOf(map, ID), strOf(map, SCRIPT))
-            K_EVAL_RESULT -> Frame.EvalResult(intOf(map, ID), map.getValue(VALUE))
-            else -> error("Unknown frame kind")
+        return with(FrameCodec) {
+            when (kindOf(map)) {
+                K_LOAD ->
+                    Frame.Load(
+                        strOf(map, LANGUAGE),
+                        strOf(map, API_LEVEL),
+                        strsOf(map, CAPS),
+                        strOf(map, SHIM),
+                        strOf(map, SCRIPT),
+                        (map[OPTIONS] as? Value.VObject)?.entries.orEmpty().mapValues { (_, v) -> (v as Value.VString).value },
+                    )
+                K_DISPATCH -> Frame.Dispatch(map.getValue(VALUE) as Value.VObject)
+                K_CLOSE -> Frame.Close
+                K_HOST_CALL -> Frame.HostCall(intOf(map, ID), strOf(map, METHOD), (map.getValue(ARGS) as Value.VArray).items)
+                K_RESULT -> Frame.Result(intOf(map, ID), resultOf(map))
+                K_EVAL -> Frame.Eval(intOf(map, ID), strOf(map, SCRIPT))
+                K_EVAL_RESULT -> Frame.EvalResult(intOf(map, ID), resultOf(map))
+                else -> error("Unknown frame kind")
+            }
         }
     }
-
-    private fun obj(kind: Long, vararg fields: Pair<String, Value>): Value.VObject =
-        Value.VObject(buildMap { put(KIND, Value.VInt(kind)); fields.forEach { put(it.first, it.second) } })
-
-    private fun str(s: String) = Value.VString(s)
-    private fun int(v: Long) = Value.VInt(v)
-    private fun strOf(map: Map<String, Value>, key: String) = (map.getValue(key) as Value.VString).value
-    private fun intOf(map: Map<String, Value>, key: String) = (map.getValue(key) as Value.VInt).value
 }

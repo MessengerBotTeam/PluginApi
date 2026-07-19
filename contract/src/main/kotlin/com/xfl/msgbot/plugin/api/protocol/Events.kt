@@ -6,8 +6,11 @@
 package com.xfl.msgbot.plugin.api.protocol
 
 /**
- * Host -> script event type constants and field keys. Events are [Value.VObject] with a [TYPE]
+ * Host -> script event type constants and field keys. Events are `Value.VObject` with a [TYPE]
  * key; the shim's `__dispatch` branches on it and builds the idiomatic event object.
+ *
+ * A type is listed only once the host can deliver it; the ones it will fire are advertised via
+ * [Capabilities.event].
  */
 object Events {
     const val TYPE = "type"
@@ -24,10 +27,16 @@ object Events {
     const val NOTIFICATION_POSTED = "notificationPosted"
     const val NOTIFICATION_REMOVED = "notificationRemoved"
     const val START_COMPILE = "startCompile"
-    const val TIMER = "timer"
 
-    /** TIMER event payload key. */
-    const val TIMER_ID = "timerId"
+    /**
+     * A deferred capability completed. The shim holds the callback and passes only [CALLBACK_ID];
+     * a function cannot cross the boundary.
+     */
+    const val CALLBACK = "callback"
+
+    /** CALLBACK payload keys. [CALLBACK_ARGS] is a VArray passed through to the callback. */
+    const val CALLBACK_ID = "callbackId"
+    const val CALLBACK_ARGS = "args"
 
     object Message {
         const val ROOM = "room"
