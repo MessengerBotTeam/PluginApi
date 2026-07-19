@@ -5,6 +5,8 @@
 
 package com.xfl.msgbot.plugin.api.transport
 
+import com.xfl.msgbot.plugin.api.bridge.CallResult
+import com.xfl.msgbot.plugin.api.bridge.CapabilityException
 import com.xfl.msgbot.plugin.api.source.MessageSource
 import java.util.concurrent.Executors
 
@@ -31,7 +33,7 @@ class SourceHost(
                 transport.send(SourceProtocol.encode(SourceProtocol.Frame.Event(event), transport.outbound()))
             }
             val d = source.descriptor
-            transport.send(SourceProtocol.encode(SourceProtocol.Frame.Describe(d.sourceId, d.displayName, d.capabilities), transport.outbound()))
+            transport.send(SourceProtocol.encode(SourceProtocol.Frame.Describe(d.sourceId, d.displayName, d.capabilities, d.events), transport.outbound()))
         }
     }
 
@@ -40,18 +42,22 @@ class SourceHost(
             is SourceProtocol.Frame.Start -> executor.submit { source.start() }
             is SourceProtocol.Frame.Stop -> executor.submit { source.stop() }
             is SourceProtocol.Frame.Call -> executor.submit {
-                val result = runCatching { source.call(frame.method, frame.args) }.getOrElse { com.xfl.msgbot.plugin.api.value.Value.VNull }
+                // The caller is blocked on this, so a throw must come back as an answer.
+                val result =
+                    try {
+                        CallResult.of(source.call(frame.method, frame.args))
+                    } catch (e: CapabilityException) {
+                        CallResult.Err(e.code, e.message ?: e.code)
+                    } catch (e: Exception) {
+                        CallResult.failed(e.message ?: e.javaClass.simpleName)
+                    }
                 transport.send(SourceProtocol.encode(SourceProtocol.Frame.CallResult(frame.id, result), transport.outbound()))
             }
             else -> Unit // Event/CallResult/Describe are source-to-host only
         }
     }
 
-    /**
-     * Tears the source down. A host that dies never sends Stop, so a plugin that outlives it must
-     * be able to do this itself; otherwise the old source keeps running (and keeps emitting) while
-     * a reconnecting host builds a second one.
-     */
+    /** A host that dies never sends Stop, so the plugin must be able to do this itself. */
     override fun close() {
         executor.submit { runCatching { source.stop() } }
         executor.shutdown()

@@ -5,6 +5,7 @@
 
 package com.xfl.msgbot.plugin.api.source
 
+import com.xfl.msgbot.plugin.api.protocol.Events
 import com.xfl.msgbot.plugin.api.value.Value
 
 /**
@@ -23,9 +24,10 @@ interface MessageSource : AutoCloseable {
     fun bindSink(sink: EventSink)
 
     /**
-     * Execute a capability this source declared ([SourceDescriptor.capabilities]), e.g. reply or
-     * markAsRead. Tokens in [args] are the ones this source put in the event it emitted, so it can
-     * resolve them without the host understanding what they mean.
+     * Execute a capability this source declared ([SourceDescriptor.capabilities]). Tokens in
+     * [args] are the ones this source put in the event it emitted. Fail by throwing
+     * ([com.xfl.msgbot.plugin.api.bridge.CapabilityException] to name the kind); the failure
+     * travels back to the script as an answer.
      */
     fun call(method: String, args: List<Value>): Value
 
@@ -43,12 +45,15 @@ fun interface EventSink {
 }
 
 /**
- * What a source advertises. [capabilities] is the honest list of what it can execute: a
- * notification source has reply/markAsRead only, while an official API might add media or edits.
- * The host intersects it with its own implementations to decide the script's API surface.
+ * What a source advertises. Both lists are open and unfiltered: what a source declares is what a
+ * script gets. [capabilities] are short names under `bot.*` (e.g. "reply", "sendImage"), [events]
+ * are event types (e.g. "message"); declaring one is a promise to implement it.
  */
 data class SourceDescriptor(
     val sourceId: String,
     val displayName: String,
+    /** What [MessageSource.call] will execute. */
     val capabilities: List<String>,
+    /** Event types this source emits. A listener for anything else would wait forever. */
+    val events: List<String> = listOf(Events.MESSAGE),
 )

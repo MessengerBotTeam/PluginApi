@@ -17,14 +17,10 @@ import com.xfl.msgbot.plugin.api.value.Value
  * Source -> host: [Frame.Event], [Frame.CallResult], [Frame.Describe].
  */
 object SourceProtocol {
-    private const val KIND = "k"
-    private const val ID = "id"
-    private const val METHOD = "m"
-    private const val ARGS = "a"
-    private const val VALUE = "v"
     private const val SOURCE_ID = "s"
     private const val NAME = "n"
     private const val CAPS = "p"
+    private const val EVENTS = "ev"
 
     private const val K_START = 1L
     private const val K_STOP = 2L
@@ -38,10 +34,17 @@ object SourceProtocol {
         object Stop : Frame
         data class Call(val id: Long, val method: String, val args: List<Value>) : Frame
         data class Event(val event: Value.VObject) : Frame
-        data class CallResult(val id: Long, val value: Value) : Frame
 
-        /** Sent once on connect so the host learns the sourceId and what it can execute. */
-        data class Describe(val sourceId: String, val displayName: String, val capabilities: List<String>) : Frame
+        /** Answers a [Call] with what the source produced, or with why it produced nothing. */
+        data class CallResult(val id: Long, val result: com.xfl.msgbot.plugin.api.bridge.CallResult) : Frame
+
+        /** Sent once on connect: who this source is, what it can execute, and what it emits. */
+        data class Describe(
+            val sourceId: String,
+            val displayName: String,
+            val capabilities: List<String>,
+            val events: List<String>,
+        ) : Frame
     }
 
     fun encode(frame: Frame, onBlob: ValueCodec.BlobHook = ValueCodec.BlobHook { it }): ByteArray =
@@ -51,43 +54,36 @@ object SourceProtocol {
         fromValue(ValueCodec.decode(bytes, onBlob))
 
     private fun toValue(frame: Frame): Value =
-        when (frame) {
-            is Frame.Start -> obj(K_START)
-            is Frame.Stop -> obj(K_STOP)
-            is Frame.Call ->
-                obj(K_CALL, ID to Value.VInt(frame.id), METHOD to Value.VString(frame.method), ARGS to Value.VArray(frame.args))
-            is Frame.Event -> obj(K_EVENT, VALUE to frame.event)
-            is Frame.CallResult -> obj(K_CALL_RESULT, ID to Value.VInt(frame.id), VALUE to frame.value)
-            is Frame.Describe ->
-                obj(
-                    K_DESCRIBE,
-                    SOURCE_ID to Value.VString(frame.sourceId),
-                    NAME to Value.VString(frame.displayName),
-                    CAPS to Value.VArray(frame.capabilities.map(Value::VString)),
-                )
+        with(FrameCodec) {
+            when (frame) {
+                is Frame.Start -> obj(K_START)
+                is Frame.Stop -> obj(K_STOP)
+                is Frame.Call -> obj(K_CALL, ID to int(frame.id), METHOD to str(frame.method), ARGS to Value.VArray(frame.args))
+                is Frame.Event -> obj(K_EVENT, VALUE to frame.event)
+                is Frame.CallResult -> obj(K_CALL_RESULT, ID to int(frame.id), *resultFields(frame.result))
+                is Frame.Describe ->
+                    obj(
+                        K_DESCRIBE,
+                        SOURCE_ID to str(frame.sourceId),
+                        NAME to str(frame.displayName),
+                        CAPS to strs(frame.capabilities),
+                        EVENTS to strs(frame.events),
+                    )
+            }
         }
 
     private fun fromValue(value: Value): Frame {
         val map = (value as Value.VObject).entries
-        return when ((map.getValue(KIND) as Value.VInt).value) {
-            K_START -> Frame.Start
-            K_STOP -> Frame.Stop
-            K_CALL -> Frame.Call(intOf(map, ID), strOf(map, METHOD), (map.getValue(ARGS) as Value.VArray).items)
-            K_EVENT -> Frame.Event(map.getValue(VALUE) as Value.VObject)
-            K_CALL_RESULT -> Frame.CallResult(intOf(map, ID), map.getValue(VALUE))
-            K_DESCRIBE ->
-                Frame.Describe(
-                    strOf(map, SOURCE_ID),
-                    strOf(map, NAME),
-                    (map.getValue(CAPS) as Value.VArray).items.map { (it as Value.VString).value },
-                )
-            else -> error("Unknown source frame kind")
+        return with(FrameCodec) {
+            when (kindOf(map)) {
+                K_START -> Frame.Start
+                K_STOP -> Frame.Stop
+                K_CALL -> Frame.Call(intOf(map, ID), strOf(map, METHOD), (map.getValue(ARGS) as Value.VArray).items)
+                K_EVENT -> Frame.Event(map.getValue(VALUE) as Value.VObject)
+                K_CALL_RESULT -> Frame.CallResult(intOf(map, ID), resultOf(map))
+                K_DESCRIBE -> Frame.Describe(strOf(map, SOURCE_ID), strOf(map, NAME), strsOf(map, CAPS), strsOf(map, EVENTS))
+                else -> error("Unknown source frame kind")
+            }
         }
     }
-
-    private fun obj(kind: Long, vararg fields: Pair<String, Value>): Value.VObject =
-        Value.VObject(buildMap { put(KIND, Value.VInt(kind)); fields.forEach { put(it.first, it.second) } })
-
-    private fun strOf(map: Map<String, Value>, key: String) = (map.getValue(key) as Value.VString).value
-    private fun intOf(map: Map<String, Value>, key: String) = (map.getValue(key) as Value.VInt).value
 }
