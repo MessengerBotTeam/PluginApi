@@ -13,8 +13,9 @@ import com.xfl.msgbot.plugin.api.value.Value
  * Frame types exchanged over a [PluginTransport] and their binary encoding (via [ValueCodec]).
  *
  * Host -> plugin: [Frame.Load], [Frame.Dispatch], [Frame.Eval], [Frame.Close], [Frame.Result].
- * Plugin -> host: [Frame.HostCall], [Frame.EvalResult].
- * ([Frame.Result] answers a HostCall; [Frame.EvalResult] answers an Eval.)
+ * Plugin -> host: [Frame.HostCall], [Frame.LoadResult], [Frame.EvalResult], [Frame.Error].
+ * ([Frame.Result] answers a HostCall; [Frame.LoadResult] answers a Load; [Frame.EvalResult]
+ * answers an Eval. [Frame.Error] carries a failure of one-way work that has no answer to ride.)
  */
 object PluginProtocol {
     private const val SHIM = "s"
@@ -31,10 +32,13 @@ object PluginProtocol {
     private const val K_RESULT = 5L
     private const val K_EVAL = 6L
     private const val K_EVAL_RESULT = 7L
+    private const val K_LOAD_RESULT = 8L
+    private const val K_ERROR = 9L
 
     sealed interface Frame {
         /** [shim] empty => the plugin supplies its own shim for [apiLevel]. */
         data class Load(
+            val id: Long,
             /** Which language [userScript] is written in; a polyglot engine cannot infer it. */
             val language: String,
             val apiLevel: String,
@@ -50,10 +54,16 @@ object PluginProtocol {
 
         /** Answers a [HostCall] with what the capability produced, or with why it produced nothing. */
         data class Result(val id: Long, val result: CallResult) : Frame
+
+        /** Answers a [Load]: a script that cannot even load must fail the compile, not the first message. */
+        data class LoadResult(val id: Long, val result: CallResult) : Frame
         data class Eval(val id: Long, val source: String) : Frame
 
         /** Answers an [Eval] with what it produced, or with why it produced nothing. */
         data class EvalResult(val id: Long, val result: CallResult) : Frame
+
+        /** A failure of one-way work (a dispatch, the engine's own startup) that would otherwise stay in the plugin's log. */
+        data class Error(val message: String) : Frame
     }
 
     fun encode(frame: Frame, onBlob: ValueCodec.BlobHook = ValueCodec.BlobHook { it }): ByteArray =
@@ -68,6 +78,7 @@ object PluginProtocol {
                 is Frame.Load ->
                     obj(
                         K_LOAD,
+                        ID to int(frame.id),
                         LANGUAGE to str(frame.language),
                         API_LEVEL to str(frame.apiLevel),
                         CAPS to strs(frame.capabilities),
@@ -79,8 +90,10 @@ object PluginProtocol {
                 is Frame.Close -> obj(K_CLOSE)
                 is Frame.HostCall -> obj(K_HOST_CALL, ID to int(frame.id), METHOD to str(frame.method), ARGS to Value.VArray(frame.args))
                 is Frame.Result -> obj(K_RESULT, ID to int(frame.id), *resultFields(frame.result))
+                is Frame.LoadResult -> obj(K_LOAD_RESULT, ID to int(frame.id), *resultFields(frame.result))
                 is Frame.Eval -> obj(K_EVAL, ID to int(frame.id), SCRIPT to str(frame.source))
                 is Frame.EvalResult -> obj(K_EVAL_RESULT, ID to int(frame.id), *resultFields(frame.result))
+                is Frame.Error -> obj(K_ERROR, ERROR_MESSAGE to str(frame.message))
             }
         }
 
@@ -90,6 +103,7 @@ object PluginProtocol {
             when (kindOf(map)) {
                 K_LOAD ->
                     Frame.Load(
+                        intOf(map, ID),
                         strOf(map, LANGUAGE),
                         strOf(map, API_LEVEL),
                         strsOf(map, CAPS),
@@ -101,8 +115,10 @@ object PluginProtocol {
                 K_CLOSE -> Frame.Close
                 K_HOST_CALL -> Frame.HostCall(intOf(map, ID), strOf(map, METHOD), (map.getValue(ARGS) as Value.VArray).items)
                 K_RESULT -> Frame.Result(intOf(map, ID), resultOf(map))
+                K_LOAD_RESULT -> Frame.LoadResult(intOf(map, ID), resultOf(map))
                 K_EVAL -> Frame.Eval(intOf(map, ID), strOf(map, SCRIPT))
                 K_EVAL_RESULT -> Frame.EvalResult(intOf(map, ID), resultOf(map))
+                K_ERROR -> Frame.Error(strOf(map, ERROR_MESSAGE))
                 else -> error("Unknown frame kind")
             }
         }

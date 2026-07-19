@@ -22,15 +22,19 @@ import java.util.concurrent.atomic.AtomicLong
  *
  * The transport delivers frames on its own thread, so serving a host-call here never blocks the
  * plugin's engine thread that awaits the result.
+ *
+ * [onError] carries failures of one-way work (a dispatch, the engine's startup) that the plugin
+ * reports with an Error frame; without it they exist only in the plugin process's log.
  */
 class RemoteScriptEngine(
     private val transport: PluginTransport,
     override val descriptor: EngineDescriptor,
     private val callTimeoutMs: Long = 30_000,
+    private val onError: (String) -> Unit = {},
 ) : ScriptEngine {
     private var hostBridge: HostBridge? = null
-    private val evalSeq = AtomicLong(0)
-    private val pendingEvals = ConcurrentHashMap<Long, CompletableFuture<CallResult>>()
+    private val requestSeq = AtomicLong(0)
+    private val pending = ConcurrentHashMap<Long, CompletableFuture<CallResult>>()
 
     init {
         transport.setListener(::onFrame)
@@ -40,6 +44,12 @@ class RemoteScriptEngine(
         hostBridge = bridge
     }
 
+    /**
+     * Waits for the plugin to answer: a script that cannot load must fail here, where the compile
+     * that sent it can still say so, not on the first message.
+     *
+     * @throws IllegalStateException with what the engine said.
+     */
     override fun load(
         language: String,
         apiLevel: String,
@@ -48,8 +58,10 @@ class RemoteScriptEngine(
         userScript: String,
         options: Map<String, String>,
     ) {
-        val frame = PluginProtocol.Frame.Load(language, apiLevel, capabilities, shim, userScript, options)
-        transport.send(PluginProtocol.encode(frame, transport.outbound()))
+        val result =
+            request { id -> PluginProtocol.Frame.Load(id, language, apiLevel, capabilities, shim, userScript, options) }
+                ?: throw IllegalStateException("The plugin did not answer the load within ${callTimeoutMs}ms")
+        if (result is CallResult.Err) throw IllegalStateException("load failed: ${result.message}")
     }
 
     override fun dispatch(event: Value.VObject) {
@@ -58,25 +70,38 @@ class RemoteScriptEngine(
 
     /** @throws IllegalStateException with what the engine said. */
     override fun eval(source: String): Value {
-        val id = evalSeq.incrementAndGet()
-        val future = CompletableFuture<CallResult>()
-        pendingEvals[id] = future
-        transport.send(PluginProtocol.encode(PluginProtocol.Frame.Eval(id, source), transport.outbound()))
         val result =
-            try {
-                future.get(callTimeoutMs, TimeUnit.MILLISECONDS)
-            } finally {
-                pendingEvals.remove(id)
-            }
+            request { id -> PluginProtocol.Frame.Eval(id, source) }
+                ?: throw IllegalStateException("The plugin did not answer the eval within ${callTimeoutMs}ms")
         return when (result) {
             is CallResult.Ok -> result.value
             is CallResult.Err -> throw IllegalStateException("eval failed: ${result.message}")
         }
     }
 
+    /** Sends the frame [make] builds and waits for its answer; null when none came in time. */
+    private fun request(make: (id: Long) -> PluginProtocol.Frame): CallResult? {
+        val id = requestSeq.incrementAndGet()
+        val future = CompletableFuture<CallResult>()
+        pending[id] = future
+        transport.send(PluginProtocol.encode(make(id), transport.outbound()))
+        return try {
+            future.get(callTimeoutMs, TimeUnit.MILLISECONDS)
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            null
+        } catch (e: Exception) {
+            null
+        } finally {
+            pending.remove(id)
+        }
+    }
+
     override fun close() {
         transport.send(PluginProtocol.encode(PluginProtocol.Frame.Close, transport.outbound()))
         transport.close()
+        // Whoever is waiting would otherwise sit out the full timeout against a closed transport.
+        pending.values.forEach { it.complete(CallResult.failed("The engine connection was closed")) }
     }
 
     private fun onFrame(bytes: ByteArray) {
@@ -88,7 +113,9 @@ class RemoteScriptEngine(
                         ?: CallResult.failed("The host is not ready to answer '${frame.method}'")
                 transport.send(PluginProtocol.encode(PluginProtocol.Frame.Result(frame.id, result), transport.outbound()))
             }
-            is PluginProtocol.Frame.EvalResult -> pendingEvals.remove(frame.id)?.complete(frame.result)
+            is PluginProtocol.Frame.LoadResult -> pending.remove(frame.id)?.complete(frame.result)
+            is PluginProtocol.Frame.EvalResult -> pending.remove(frame.id)?.complete(frame.result)
+            is PluginProtocol.Frame.Error -> onError(frame.message)
             else -> Unit // Load/Dispatch/Eval/Close/Result are inbound only on the plugin side
         }
     }

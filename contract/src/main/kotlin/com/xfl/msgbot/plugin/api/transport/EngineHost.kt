@@ -8,6 +8,7 @@ package com.xfl.msgbot.plugin.api.transport
 import com.xfl.msgbot.plugin.api.bridge.CallResult
 import com.xfl.msgbot.plugin.api.bridge.HostBridge
 import com.xfl.msgbot.plugin.api.engine.ScriptEngine
+import com.xfl.msgbot.plugin.api.value.Value
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
@@ -79,11 +80,19 @@ class EngineHost(
         if (closed.get()) return
         when (val frame = PluginProtocol.decode(bytes, transport.inbound())) {
             is PluginProtocol.Frame.Load -> runOnEngine {
-                report("load ${frame.language}/${frame.apiLevel}") {
-                    // Empty shim => the host has none for this language; fall back to our own.
-                    val shim = frame.shim.ifEmpty { shimProvider(frame.language, frame.apiLevel).orEmpty() }
-                    engine.load(frame.language, frame.apiLevel, frame.capabilities, shim, frame.userScript, frame.options)
-                }
+                // The compile that sent this is waiting on the answer, so a throw must become one.
+                val answer =
+                    try {
+                        // Empty shim => the host has none for this language; fall back to our own.
+                        val shim = frame.shim.ifEmpty { shimProvider(frame.language, frame.apiLevel).orEmpty() }
+                        engine.load(frame.language, frame.apiLevel, frame.capabilities, shim, frame.userScript, frame.options)
+                        CallResult.of(Value.VNull)
+                    } catch (e: Exception) {
+                        val message = "load ${frame.language}/${frame.apiLevel} failed: ${e.message ?: e.javaClass.simpleName}"
+                        onError(message)
+                        CallResult.failed(message)
+                    }
+                transport.send(PluginProtocol.encode(PluginProtocol.Frame.LoadResult(frame.id, answer), transport.outbound()))
             }
             is PluginProtocol.Frame.Dispatch -> runOnEngine {
                 report("dispatch") { engine.dispatch(frame.event) }
@@ -113,7 +122,11 @@ class EngineHost(
         }
     }
 
-    /** One-way work: `submit` files exceptions in a Future nobody reads, so report them here. */
+    /**
+     * One-way work: `submit` files exceptions in a Future nobody reads, so report them here --
+     * locally through [onError], and to the host as an Error frame, which is the only place a
+     * user can see them.
+     */
     private inline fun report(
         what: String,
         block: () -> Unit,
@@ -121,7 +134,11 @@ class EngineHost(
         try {
             block()
         } catch (e: Exception) {
-            onError("$what failed: ${e.message ?: e.javaClass.simpleName}")
+            val message = "$what failed: ${e.message ?: e.javaClass.simpleName}"
+            onError(message)
+            runCatching {
+                transport.send(PluginProtocol.encode(PluginProtocol.Frame.Error(message), transport.outbound()))
+            }
         }
     }
 

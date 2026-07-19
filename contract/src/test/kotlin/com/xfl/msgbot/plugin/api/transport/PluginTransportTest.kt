@@ -168,12 +168,39 @@ class PluginTransportTest {
 
         // A plugin may advertise an apiLevel it has no shim for: the descriptor the host reads and
         // the engine's own list are two lists, and nothing makes them agree. When they drift, the
-        // script simply never loads -- and until this was reported, the bot just sat there doing
-        // nothing, with no error anywhere to say why.
-        host.load("test", "API3", emptyList(), "", "<script>")
+        // script simply never loads -- and before the Load ack, the compile that sent it reported
+        // success while the bot just sat there doing nothing.
+        val started = System.currentTimeMillis()
+        val error = runCatching { host.load("test", "API3", emptyList(), "", "<script>") }.exceptionOrNull()
+        val elapsed = System.currentTimeMillis() - started
+
+        assertTrue(error?.message?.contains("API3") == true, "the load call itself should fail, got: ${error?.message}")
+        assertTrue(elapsed < 5_000, "the refusal should come as an answer, not a timeout; took ${elapsed}ms")
 
         val message = reported.poll(5, TimeUnit.SECONDS)
-        assertTrue(message?.contains("API3") == true, "the load failure should be reported, got: $message")
+        assertTrue(message?.contains("API3") == true, "the plugin's own log should hear it too, got: $message")
+    }
+
+    @Test
+    fun `a dispatch failure crosses back to the host instead of staying in the plugin's log`() {
+        val (hostT, pluginT) = LoopbackTransport.pair()
+        val exploding =
+            object : ScriptEngine by FakeEngine() {
+                override fun dispatch(event: Value.VObject): Unit = throw IllegalStateException("listener blew up")
+            }
+        EngineHost(pluginT, { exploding })
+
+        val heard = LinkedBlockingQueue<String>()
+        val host =
+            RemoteScriptEngine(hostT, EngineDescriptor("remote", "Remote", listOf("test")), onError = { heard.put(it) })
+
+        host.load("test", "API2", emptyList(), "<shim>", "<script>")
+        // Dispatch is one-way: nothing waits on it, so its failure needs a frame of its own.
+        host.dispatch(Value.VObject(mapOf("type" to Value.VString("message"))))
+
+        val message = heard.poll(5, TimeUnit.SECONDS)
+        assertTrue(message?.contains("listener blew up") == true, "the host should hear why, got: $message")
+        host.close()
     }
 
     @Test
@@ -205,14 +232,15 @@ class PluginTransportTest {
     fun `a frame arriving after close is dropped, not a crash`() {
         val (hostT, pluginT) = LoopbackTransport.pair()
         val pluginSide = EngineHost(pluginT, { FakeEngine() })
-        val host = RemoteScriptEngine(hostT, EngineDescriptor("remote", "Remote", listOf("test")))
+        // Short timeout: the load below has nobody left to answer it and must only time out.
+        val host = RemoteScriptEngine(hostT, EngineDescriptor("remote", "Remote", listOf("test")), callTimeoutMs = 500)
 
         // The plugin side is torn down while the host still has frames to send: its executor is
         // shut down, and a dispatch that lands after would submit onto it and throw
         // RejectedExecutionException out of the transport callback -- a crash on a device.
         pluginSide.close()
         host.dispatch(Value.VObject(mapOf("type" to Value.VString("message"))))
-        host.load("test", "API2", emptyList(), "<shim>", "<script>")
+        runCatching { host.load("test", "API2", emptyList(), "<shim>", "<script>") }
         Thread.sleep(100)
 
         // Getting here at all is the assertion: the late frames were dropped instead of thrown.
