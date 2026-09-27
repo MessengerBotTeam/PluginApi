@@ -8,11 +8,10 @@ package com.xfl.msgbot.plugin.api.provider
 import com.xfl.msgbot.plugin.api.value.Value
 
 /**
- * Contract a message source implements: where events come from and how to act on them.
+ * Event and capability provider, independent of the language engine.
  *
- * A source is the mirror image of an engine. An engine receives events and calls capabilities;
- * a source emits events and executes capabilities. Both know only this host contract, so sources
- * and engines never learn about each other and N sources x M engines stays N + M.
+ * A provider emits events and executes qualified calls. The host passes project identity in
+ * [ProviderCall] and delivers [ProviderEvent] only to projects that selected this provider.
  *
  * All methods run on a single dedicated thread, guaranteed by the host runtime.
  */

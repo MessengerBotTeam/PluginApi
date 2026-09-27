@@ -19,7 +19,7 @@ import java.util.concurrent.atomic.AtomicLong
  *
  * ```kotlin
  * class PluginService : PluginServiceBase() {
- *     override fun createHost(transport: PluginTransport) = EngineHost(transport) { MyEngine() }
+ *     override fun createHost(transport: PluginTransport) = EngineHost(transport, engineFactory = { MyEngine() })
  * }
  * ```
  *

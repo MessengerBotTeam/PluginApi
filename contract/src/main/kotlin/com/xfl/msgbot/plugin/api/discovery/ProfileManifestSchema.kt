@@ -1,3 +1,8 @@
+/*
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ * Copyright (C) 2025 naijun0403
+ */
+
 package com.xfl.msgbot.plugin.api.discovery
 
 /** XML metadata for language-specific script facades, independent of engine APKs. */
