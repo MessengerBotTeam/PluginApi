@@ -8,17 +8,57 @@ package com.xfl.msgbot.plugin.api.transport
 import com.xfl.msgbot.plugin.api.bridge.CallResult
 import com.xfl.msgbot.plugin.api.bridge.HostBridge
 import com.xfl.msgbot.plugin.api.engine.EngineDescriptor
+import com.xfl.msgbot.plugin.api.engine.PollingScriptEngine
 import com.xfl.msgbot.plugin.api.engine.ScriptEngine
 import com.xfl.msgbot.plugin.api.value.Value
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class PluginTransportTest {
+    @Test
+    fun `event loop polling runs on the engine thread without a host event`() {
+        val (hostT, pluginT) = LoopbackTransport.pair()
+        val called = CountDownLatch(1)
+        val threads = AtomicReference<Pair<Thread, Thread>>()
+        val engine = object : PollingScriptEngine {
+            override val descriptor = EngineDescriptor("async", "Async", listOf("javascript"))
+            private lateinit var bridge: HostBridge
+            private lateinit var loadThread: Thread
+
+            override fun bindHost(bridge: HostBridge) { this.bridge = bridge }
+            override fun load(language: String, capabilities: List<String>, shim: String, userScript: String, options: Map<String, String>) {
+                loadThread = Thread.currentThread()
+            }
+            override fun poll() {
+                threads.set(loadThread to Thread.currentThread())
+                bridge.call("async.done", emptyList())
+            }
+            override fun eval(source: String): Value = Value.VNull
+            override fun dispatch(event: Value.VObject) = Unit
+            override fun close() = Unit
+        }
+        val host = RemoteScriptEngine(hostT, engine.descriptor)
+        host.bindHost { method, _ ->
+            if (method == "async.done") called.countDown()
+            CallResult.of(Value.VNull)
+        }
+        EngineHost(pluginT, { engine }, pollIntervalMs = 10)
+
+        try {
+            host.load("javascript", listOf("async.done"), "<shim>", "<script>")
+            assertTrue(called.await(5, TimeUnit.SECONDS), "poll must run without dispatch")
+            assertEquals(threads.get().first, threads.get().second)
+        } finally {
+            host.close()
+        }
+    }
+
     /** Stands in for a real engine: on dispatch it "replies", on eval it echoes. */
     private class FakeEngine : ScriptEngine {
         override val descriptor = EngineDescriptor("fake", "Fake", listOf("test"))

@@ -8,11 +8,13 @@ package com.xfl.msgbot.plugin.api.transport
 import com.xfl.msgbot.plugin.api.bridge.CallResult
 import com.xfl.msgbot.plugin.api.bridge.HostBridge
 import com.xfl.msgbot.plugin.api.engine.ScriptEngine
+import com.xfl.msgbot.plugin.api.engine.PollingScriptEngine
 import com.xfl.msgbot.plugin.api.value.Value
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -31,13 +33,16 @@ class EngineHost(
     private val callTimeoutMs: Long = 30_000,
     /** Told when one-way work (load/dispatch) fails; the exception has nowhere else to surface. */
     private val onError: (String) -> Unit = {},
+    /** Set for event-loop engines; zero disables background polling. */
+    private val pollIntervalMs: Long = 0,
 ) : AutoCloseable {
-    private val engineExecutor = Executors.newSingleThreadExecutor { r -> Thread(r, "plugin-engine") }
+    private val engineExecutor = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "plugin-engine") }
     private val callSeq = AtomicLong(0)
     private val pendingCalls = ConcurrentHashMap<Long, CompletableFuture<CallResult>>()
     private val closed = AtomicBoolean(false)
 
     @Volatile private lateinit var engine: ScriptEngine
+    @Volatile private var pollTask: ScheduledFuture<*>? = null
 
     private val proxyBridge =
         HostBridge { method, args ->
@@ -59,6 +64,7 @@ class EngineHost(
         }
 
     init {
+        require(pollIntervalMs >= 0) { "pollIntervalMs must be nonnegative" }
         transport.setListener(::onFrame)
         engineExecutor.submit {
             // submit files a throw in a Future nobody reads; a runtime that cannot even start
@@ -66,6 +72,22 @@ class EngineHost(
             report("engine init") {
                 engine = engineFactory()
                 engine.bindHost(proxyBridge)
+                val pollingEngine = engine as? PollingScriptEngine
+                if (pollingEngine != null && pollIntervalMs > 0) {
+                    pollTask = engineExecutor.scheduleWithFixedDelay(
+                        {
+                            try {
+                                pollingEngine.poll()
+                            } catch (e: Exception) {
+                                pollTask?.cancel(false)
+                                report("engine poll") { throw e }
+                            }
+                        },
+                        pollIntervalMs,
+                        pollIntervalMs,
+                        TimeUnit.MILLISECONDS,
+                    )
+                }
             }
         }
     }
@@ -143,6 +165,8 @@ class EngineHost(
      */
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
+        pollTask?.cancel(false)
+        pendingCalls.values.forEach { it.complete(CallResult.failed("The engine session was closed")) }
         engineExecutor.submit { runCatching { engine.close() } }
         engineExecutor.shutdown()
         transport.close()
