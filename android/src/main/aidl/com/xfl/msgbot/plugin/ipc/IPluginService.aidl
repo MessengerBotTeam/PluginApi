@@ -7,7 +7,7 @@ import android.os.SharedMemory;
 // One service can host independent project sessions.
 interface IPluginService {
     int protocolVersion();
-    long open(IPluginCallback callback);
+    long open(String action, IPluginCallback callback);
 
     oneway void send(long sessionId, in byte[] frame);
 

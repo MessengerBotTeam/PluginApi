@@ -22,7 +22,7 @@ object Capabilities {
 
     /**
      * The bot itself: messaging plus the script's own lifecycle. Messaging methods are the ones a
-     * [com.xfl.msgbot.plugin.api.source.MessageSource] declares support for.
+     * [com.xfl.msgbot.plugin.api.provider.CapabilityProvider] declares support for.
      */
     object Bot {
         const val NAMESPACE = "bot"

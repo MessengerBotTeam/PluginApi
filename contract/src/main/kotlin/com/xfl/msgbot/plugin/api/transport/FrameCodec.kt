@@ -9,7 +9,7 @@ import com.xfl.msgbot.plugin.api.bridge.CallResult
 import com.xfl.msgbot.plugin.api.value.Value
 
 /**
- * Field names and helpers shared by [PluginProtocol] and [SourceProtocol]; the frame vocabularies
+ * Field names and helpers shared by [PluginProtocol] and [ProviderProtocol]; the frame vocabularies
  * stay separate, the spelling of ids, args and failures does not.
  */
 internal object FrameCodec {

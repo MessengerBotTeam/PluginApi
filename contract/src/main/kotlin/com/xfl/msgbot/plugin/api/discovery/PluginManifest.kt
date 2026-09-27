@@ -70,11 +70,16 @@ data class PluginManifest(
         /** Message source plugins advertise this instead; same transport, opposite direction. */
         const val SOURCE_SERVICE_ACTION = "com.xfl.msgbot.plugin.SOURCE"
 
+        /** A provider of namespaced capabilities and events, selected per project. */
+        const val EXTENSION_SERVICE_ACTION = "com.xfl.msgbot.plugin.EXTENSION"
+
         /**
          * Source identity, the open string a project points at. All a source declares here: its
          * capabilities and events are answered at runtime, in its Describe frame.
          */
         const val META_SOURCE_ID = "com.xfl.msgbot.plugin.sourceId"
+        const val META_EXTENSION_ID = "com.xfl.msgbot.plugin.extensionId"
+        const val META_EXTENSION_NAMESPACE = "com.xfl.msgbot.plugin.namespace"
 
         /** Signature-level permission guarding the plugin service (host signing key). */
         const val PLUGIN_PERMISSION = "com.xfl.msgbot.permission.PLUGIN"

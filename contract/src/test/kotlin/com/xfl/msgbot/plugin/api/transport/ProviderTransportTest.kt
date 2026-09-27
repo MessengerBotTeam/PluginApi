@@ -7,21 +7,21 @@ package com.xfl.msgbot.plugin.api.transport
 
 import com.xfl.msgbot.plugin.api.bridge.CallResult
 import com.xfl.msgbot.plugin.api.bridge.CapabilityException
-import com.xfl.msgbot.plugin.api.source.EventSink
-import com.xfl.msgbot.plugin.api.source.MessageSource
-import com.xfl.msgbot.plugin.api.source.SourceDescriptor
+import com.xfl.msgbot.plugin.api.provider.ProviderEventSink
+import com.xfl.msgbot.plugin.api.provider.CapabilityProvider
+import com.xfl.msgbot.plugin.api.provider.ProviderDescriptor
 import com.xfl.msgbot.plugin.api.value.Value
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 
-class SourceTransportTest {
+class ProviderTransportTest {
     /** Stands in for a real messenger: replies succeed, sending refuses, everything else breaks. */
-    private class FakeSource : MessageSource {
-        override val descriptor = SourceDescriptor("fake-source", "Fake", listOf("reply", "send"))
+    private class FakeSource(private val failStart: Boolean = false) : CapabilityProvider {
+        override val descriptor = ProviderDescriptor("fake-source", "Fake", listOf("reply", "send"))
 
-        override fun bindSink(sink: EventSink) = Unit
+        override fun bindSink(sink: ProviderEventSink) = Unit
 
         override fun call(method: String, args: List<Value>): Value =
             when (method) {
@@ -30,17 +30,30 @@ class SourceTransportTest {
                 else -> throw IllegalStateException("wire came loose")
             }
 
-        override fun start() = Unit
+        override fun start() {
+            if (failStart) error("account is not ready")
+        }
 
         override fun stop() = Unit
     }
 
-    private fun connect(): Pair<RemoteMessageSource, SourceHost> {
+    private fun connect(failStart: Boolean = false): Pair<RemoteCapabilityProvider, ProviderHost> {
         val (hostSide, pluginSide) = LoopbackTransport.pair()
-        val remote = RemoteMessageSource(hostSide)
-        val host = SourceHost(pluginSide) { FakeSource() }
+        val remote = RemoteCapabilityProvider(hostSide)
+        val host = ProviderHost(pluginSide) { FakeSource(failStart) }
         assertNotNull(remote.awaitDescriptor(), "the source should describe itself on connect")
         return remote to host
+    }
+
+    @Test
+    fun `a provider that cannot start reports the failure before it is used`() {
+        val (remote, host) = connect(failStart = true)
+        try {
+            val error = assertFailsWith<IllegalStateException> { remote.start() }
+            assertEquals("account is not ready", error.message)
+        } finally {
+            host.close()
+        }
     }
 
     @Test

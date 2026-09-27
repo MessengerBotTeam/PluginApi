@@ -36,19 +36,23 @@ abstract class PluginServiceBase : Service() {
     private val nextSessionId = AtomicLong()
     private val sessions = ConcurrentHashMap<Long, Session>()
 
-    /** Builds the endpoint that drives this plugin: an `EngineHost` or a `SourceHost`. */
-    protected abstract fun createHost(transport: PluginTransport): AutoCloseable
+    /** Builds the endpoint that drives this plugin: an `EngineHost` or a `ProviderHost`. */
+    protected open fun createHost(transport: PluginTransport): AutoCloseable =
+        error("Override createHost(action, transport) to provide a plugin endpoint")
+
+    /** The action keeps engine, source, and extension roles independent even in one APK service. */
+    protected open fun createHost(action: String, transport: PluginTransport): AutoCloseable = createHost(transport)
 
     private val binder =
         object : IPluginService.Stub() {
             override fun protocolVersion(): Int = ProtocolVersion.CURRENT
 
-            override fun open(callback: IPluginCallback): Long {
+            override fun open(action: String, callback: IPluginCallback): Long {
                 val id = nextSessionId.incrementAndGet()
                 val transport = ServicePluginTransport(callback)
                 val host =
                     try {
-                        createHost(transport)
+                        createHost(action, transport)
                     } catch (e: Exception) {
                         transport.close()
                         throw e

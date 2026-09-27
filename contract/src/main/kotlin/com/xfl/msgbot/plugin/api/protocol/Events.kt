@@ -21,6 +21,7 @@ object Events {
      * traffic. Scripts do not read it: a script is written against a source, not aware of it.
      */
     const val SOURCE_ID = "sourceId"
+    const val PROVIDER_ID = "providerId"
 
     const val MESSAGE = "message"
     const val COMMAND = "command"
