@@ -9,6 +9,8 @@ repositories {
 
 dependencies {
     testImplementation(kotlin("test"))
+    // A non-JavaScript runtime used only to verify the language-neutral engine/profile boundary.
+    testImplementation("org.luaj:luaj-jse:3.0.1")
 }
 
 tasks.test {

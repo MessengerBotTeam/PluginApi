@@ -13,9 +13,10 @@ import com.xfl.msgbot.plugin.api.value.Value
  * Frame types exchanged over a [PluginTransport] and their binary encoding (via [ValueCodec]).
  *
  * Host -> plugin: [Frame.Load], [Frame.Dispatch], [Frame.Eval], [Frame.Close], [Frame.Result].
- * Plugin -> host: [Frame.HostCall], [Frame.LoadResult], [Frame.EvalResult], [Frame.Error].
+ * Plugin -> host: [Frame.HostCall], [Frame.LoadResult], [Frame.DispatchResult], [Frame.EvalResult], [Frame.Error].
  * ([Frame.Result] answers a HostCall; [Frame.LoadResult] answers a Load; [Frame.EvalResult]
- * answers an Eval. [Frame.Error] carries a failure of one-way work that has no answer to ride.)
+ * answers an Eval. [Frame.DispatchResult] acknowledges completed handlers; [Frame.Error]
+ * carries failures of startup or event-loop polling.)
  */
 object PluginProtocol {
     private const val SHIM = "s"
@@ -33,6 +34,7 @@ object PluginProtocol {
     private const val K_EVAL_RESULT = 7L
     private const val K_LOAD_RESULT = 8L
     private const val K_ERROR = 9L
+    private const val K_DISPATCH_RESULT = 10L
 
     sealed interface Frame {
         /** The profile shim is opaque source in [language]; the engine never selects an API. */
@@ -46,7 +48,8 @@ object PluginProtocol {
             /** Per-project settings the engine declared; the host carries them without reading them. */
             val options: Map<String, String> = emptyMap(),
         ) : Frame
-        data class Dispatch(val event: Value.VObject) : Frame
+        data class Dispatch(val event: Value.VObject, val id: Long = 0) : Frame
+        data class DispatchResult(val id: Long, val result: CallResult) : Frame
         object Close : Frame
         data class HostCall(val id: Long, val method: String, val args: List<Value>) : Frame
 
@@ -83,7 +86,8 @@ object PluginProtocol {
                         SCRIPT to str(frame.userScript),
                         OPTIONS to Value.VObject(frame.options.mapValues { (_, v) -> str(v) }),
                     )
-                is Frame.Dispatch -> obj(K_DISPATCH, VALUE to frame.event)
+                is Frame.Dispatch -> obj(K_DISPATCH, ID to int(frame.id), VALUE to frame.event)
+                is Frame.DispatchResult -> obj(K_DISPATCH_RESULT, ID to int(frame.id), *resultFields(frame.result))
                 is Frame.Close -> obj(K_CLOSE)
                 is Frame.HostCall -> obj(K_HOST_CALL, ID to int(frame.id), METHOD to str(frame.method), ARGS to Value.VArray(frame.args))
                 is Frame.Result -> obj(K_RESULT, ID to int(frame.id), *resultFields(frame.result))
@@ -107,7 +111,8 @@ object PluginProtocol {
                         strOf(map, SCRIPT),
                         (map[OPTIONS] as? Value.VObject)?.entries.orEmpty().mapValues { (_, v) -> (v as Value.VString).value },
                     )
-                K_DISPATCH -> Frame.Dispatch(map.getValue(VALUE) as Value.VObject)
+                K_DISPATCH -> Frame.Dispatch(map.getValue(VALUE) as Value.VObject, (map[ID] as? Value.VInt)?.value ?: 0)
+                K_DISPATCH_RESULT -> Frame.DispatchResult(intOf(map, ID), resultOf(map))
                 K_CLOSE -> Frame.Close
                 K_HOST_CALL -> Frame.HostCall(intOf(map, ID), strOf(map, METHOD), (map.getValue(ARGS) as Value.VArray).items)
                 K_RESULT -> Frame.Result(intOf(map, ID), resultOf(map))

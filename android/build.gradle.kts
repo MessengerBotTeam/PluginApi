@@ -32,6 +32,8 @@ kotlin {
 dependencies {
     // api, not implementation: a plugin writes against the contract, and gets it by depending here.
     api(project(":contract"))
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.16.1")
 }
 
 publishing {

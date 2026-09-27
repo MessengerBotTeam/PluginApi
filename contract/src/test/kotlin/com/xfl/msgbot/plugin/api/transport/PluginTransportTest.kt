@@ -231,10 +231,7 @@ class PluginTransportTest {
             RemoteScriptEngine(hostT, EngineDescriptor("remote", "Remote", listOf("test")), onError = { heard.put(it) })
 
         host.load("test", emptyList(), "<shim>", "<script>")
-        // Dispatch is one-way: nothing waits on it, so its failure needs a frame of its own.
-        host.dispatch(Value.VObject(mapOf("type" to Value.VString("message"))))
-
-        val message = heard.poll(5, TimeUnit.SECONDS)
+        val message = runCatching { host.dispatch(Value.VObject(mapOf("type" to Value.VString("message")))) }.exceptionOrNull()?.message
         assertTrue(message?.contains("listener blew up") == true, "the host should hear why, got: $message")
         host.close()
     }
@@ -275,7 +272,7 @@ class PluginTransportTest {
         // shut down, and a dispatch that lands after would submit onto it and throw
         // RejectedExecutionException out of the transport callback -- a crash on a device.
         pluginSide.close()
-        host.dispatch(Value.VObject(mapOf("type" to Value.VString("message"))))
+        runCatching { host.dispatch(Value.VObject(mapOf("type" to Value.VString("message")))) }
         runCatching { host.load("test", emptyList(), "<shim>", "<script>") }
         Thread.sleep(100)
 

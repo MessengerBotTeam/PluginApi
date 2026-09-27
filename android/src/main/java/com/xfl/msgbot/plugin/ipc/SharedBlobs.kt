@@ -11,6 +11,7 @@ import com.xfl.msgbot.plugin.api.serialization.ValueCodec
 import com.xfl.msgbot.plugin.api.value.Blob
 import android.util.Log
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Moves large blob payloads out of Binder frames and into shared memory.
@@ -25,6 +26,7 @@ import java.util.concurrent.ConcurrentHashMap
  */
 class SharedBlobs(private val publish: (id: Long, shm: SharedMemory) -> Unit) {
     private val received = ConcurrentHashMap<Long, SharedMemory>()
+    private val transferIds = AtomicLong()
 
     /** Inline -> Shm for anything worth the mmap, publishing the region first. */
     fun outbound(): ValueCodec.BlobHook =
@@ -67,8 +69,9 @@ class SharedBlobs(private val publish: (id: Long, shm: SharedMemory) -> Unit) {
             }
             // Sealed before handing over: the peer only ever needs to read it.
             region.setProtect(OsConstants.PROT_READ)
-            publish(blob.id, region)
-            Blob(blob.id, blob.size, blob.mime, Blob.Transport.Shm(blob.id, 0L, bytes.size.toLong()))
+            val transferId = transferIds.incrementAndGet()
+            publish(transferId, region)
+            Blob(blob.id, blob.size, blob.mime, Blob.Transport.Shm(transferId, 0L, bytes.size.toLong()))
         } catch (e: Exception) {
             // Falling back to inline is still correct, just size-limited.
             Log.w(TAG, "Shared memory unavailable for blob ${blob.id}, keeping it inline", e)

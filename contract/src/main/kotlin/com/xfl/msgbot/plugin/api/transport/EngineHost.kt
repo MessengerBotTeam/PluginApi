@@ -18,6 +18,7 @@ import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.Semaphore
 
 /**
  * Plugin-side endpoint. Owns the real [ScriptEngine], created and driven on a single dedicated
@@ -35,11 +36,14 @@ class EngineHost(
     private val onError: (String) -> Unit = {},
     /** Set for event-loop engines; zero disables background polling. */
     private val pollIntervalMs: Long = 0,
+    /** Includes the currently executing event. Overflow is reported to the sender. */
+    maxPendingEvents: Int = 64,
 ) : AutoCloseable {
     private val engineExecutor = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "plugin-engine") }
     private val callSeq = AtomicLong(0)
     private val pendingCalls = ConcurrentHashMap<Long, CompletableFuture<CallResult>>()
     private val closed = AtomicBoolean(false)
+    private val eventSlots = Semaphore(maxPendingEvents.also { require(it > 0) })
 
     @Volatile private lateinit var engine: ScriptEngine
     @Volatile private var pollTask: ScheduledFuture<*>? = null
@@ -49,8 +53,9 @@ class EngineHost(
             val id = callSeq.incrementAndGet()
             val future = CompletableFuture<CallResult>()
             pendingCalls[id] = future
-            transport.send(PluginProtocol.encode(PluginProtocol.Frame.HostCall(id, method, args), transport.outbound()))
             try {
+                check(!closed.get()) { "The engine session was closed" }
+                transport.send(PluginProtocol.encode(PluginProtocol.Frame.HostCall(id, method, args), transport.outbound()))
                 future.get(callTimeoutMs, TimeUnit.MILLISECONDS)
             } catch (e: InterruptedException) {
                 // Shutdown, not a timeout; restore the flag that tells the engine thread to stop.
@@ -111,9 +116,7 @@ class EngineHost(
                     }
                 transport.send(PluginProtocol.encode(PluginProtocol.Frame.LoadResult(frame.id, answer), transport.outbound()))
             }
-            is PluginProtocol.Frame.Dispatch -> runOnEngine {
-                report("dispatch") { engine.dispatch(frame.event) }
-            }
+            is PluginProtocol.Frame.Dispatch -> dispatch(frame)
             is PluginProtocol.Frame.Eval -> runOnEngine {
                 // The caller is blocked on this, so a throw must come back as an answer.
                 val answer =
@@ -130,10 +133,45 @@ class EngineHost(
         }
     }
 
+    private fun dispatch(frame: PluginProtocol.Frame.Dispatch) {
+        fun answer(result: CallResult) {
+            if (closed.get()) return
+            if (frame.id != 0L) {
+                transport.send(PluginProtocol.encode(PluginProtocol.Frame.DispatchResult(frame.id, result), transport.outbound()))
+            } else if (result is CallResult.Err) {
+                transport.send(PluginProtocol.encode(PluginProtocol.Frame.Error(result.message), transport.outbound()))
+            }
+        }
+        if (!eventSlots.tryAcquire()) {
+            answer(CallResult.failed("Engine event queue is full"))
+            return
+        }
+        try {
+            engineExecutor.execute {
+                try {
+                    if (closed.get()) return@execute
+                    val result = try {
+                        engine.dispatch(frame.event)
+                        CallResult.of(Value.VNull)
+                    } catch (e: Exception) {
+                        val message = "dispatch failed: ${e.message ?: e.javaClass.simpleName}"
+                        onError(message)
+                        CallResult.failed(message)
+                    }
+                    answer(result)
+                } finally {
+                    eventSlots.release()
+                }
+            }
+        } catch (_: RejectedExecutionException) {
+            eventSlots.release()
+        }
+    }
+
     /** Hands work to the engine thread, tolerating a frame that raced [close]. */
     private fun runOnEngine(block: () -> Unit) {
         try {
-            engineExecutor.submit(block)
+            engineExecutor.submit { if (!closed.get()) block() }
         } catch (_: RejectedExecutionException) {
             // Closed underneath us; nothing to run it against.
         }

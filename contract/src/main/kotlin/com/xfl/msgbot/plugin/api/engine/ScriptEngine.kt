@@ -42,7 +42,11 @@ interface ScriptEngine : AutoCloseable {
     /** Evaluate arbitrary source (mainly for tests/REPL). */
     fun eval(source: String): Value
 
-    /** Deliver a host event to the script via the global `__dispatch(event)`. */
+    /**
+     * Deliver an event to the language's `__dispatch(event)` entry point. Return only after
+     * synchronous handlers and their host calls finish. Remote engines acknowledge completion;
+     * an implementation must not enqueue an event internally and immediately return.
+     */
     fun dispatch(event: Value.VObject)
 
     override fun close()

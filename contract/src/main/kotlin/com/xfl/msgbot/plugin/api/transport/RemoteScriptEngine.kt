@@ -14,6 +14,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Host-side [ScriptEngine] that runs the real engine in a plugin across a [PluginTransport].
@@ -35,6 +36,7 @@ class RemoteScriptEngine(
     private var hostBridge: HostBridge? = null
     private val requestSeq = AtomicLong(0)
     private val pending = ConcurrentHashMap<Long, CompletableFuture<CallResult>>()
+    private val closed = AtomicBoolean(false)
 
     init {
         transport.setListener(::onFrame)
@@ -64,7 +66,9 @@ class RemoteScriptEngine(
     }
 
     override fun dispatch(event: Value.VObject) {
-        transport.send(PluginProtocol.encode(PluginProtocol.Frame.Dispatch(event), transport.outbound()))
+        val result = request { id -> PluginProtocol.Frame.Dispatch(event, id) }
+            ?: throw IllegalStateException("The plugin did not finish dispatch within ${callTimeoutMs}ms")
+        if (result is CallResult.Err) throw IllegalStateException("dispatch failed: ${result.message}")
     }
 
     /** @throws IllegalStateException with what the engine said. */
@@ -80,11 +84,13 @@ class RemoteScriptEngine(
 
     /** Sends the frame [make] builds and waits for its answer; null when none came in time. */
     private fun request(make: (id: Long) -> PluginProtocol.Frame): CallResult? {
+        check(!closed.get()) { "Engine connection is closed" }
         val id = requestSeq.incrementAndGet()
         val future = CompletableFuture<CallResult>()
         pending[id] = future
-        transport.send(PluginProtocol.encode(make(id), transport.outbound()))
         return try {
+            check(!closed.get()) { "Engine connection is closed" }
+            transport.send(PluginProtocol.encode(make(id), transport.outbound()))
             future.get(callTimeoutMs, TimeUnit.MILLISECONDS)
         } catch (e: InterruptedException) {
             Thread.currentThread().interrupt()
@@ -97,13 +103,18 @@ class RemoteScriptEngine(
     }
 
     override fun close() {
-        transport.send(PluginProtocol.encode(PluginProtocol.Frame.Close, transport.outbound()))
-        transport.close()
+        if (!closed.compareAndSet(false, true)) return
         // Whoever is waiting would otherwise sit out the full timeout against a closed transport.
         pending.values.forEach { it.complete(CallResult.failed("The engine connection was closed")) }
+        try {
+            transport.send(PluginProtocol.encode(PluginProtocol.Frame.Close, transport.outbound()))
+        } finally {
+            transport.close()
+        }
     }
 
     private fun onFrame(bytes: ByteArray) {
+        if (closed.get()) return
         when (val frame = PluginProtocol.decode(bytes, transport.inbound())) {
             is PluginProtocol.Frame.HostCall -> {
                 // No bridge is the host's own bug; "no such capability" would blame the script.
@@ -114,6 +125,7 @@ class RemoteScriptEngine(
             }
             is PluginProtocol.Frame.LoadResult -> pending.remove(frame.id)?.complete(frame.result)
             is PluginProtocol.Frame.EvalResult -> pending.remove(frame.id)?.complete(frame.result)
+            is PluginProtocol.Frame.DispatchResult -> pending.remove(frame.id)?.complete(frame.result)
             is PluginProtocol.Frame.Error -> onError(frame.message)
             else -> Unit // Load/Dispatch/Eval/Close/Result are inbound only on the plugin side
         }
