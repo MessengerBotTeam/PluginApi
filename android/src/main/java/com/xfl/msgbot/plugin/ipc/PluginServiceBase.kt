@@ -11,6 +11,8 @@ import android.os.IBinder
 import android.os.SharedMemory
 import com.xfl.msgbot.plugin.api.protocol.ProtocolVersion
 import com.xfl.msgbot.plugin.api.transport.PluginTransport
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * The bound service a plugin exposes to the host. Subclass it and say what to run:
@@ -24,43 +26,70 @@ import com.xfl.msgbot.plugin.api.transport.PluginTransport
  * Everything else is the same in every plugin, shared here instead of copied.
  */
 abstract class PluginServiceBase : Service() {
-    private var transport: ServicePluginTransport? = null
-    private var host: AutoCloseable? = null
+    private class Session(
+        val callback: IPluginCallback,
+        val transport: ServicePluginTransport,
+        val host: AutoCloseable,
+        val deathRecipient: IBinder.DeathRecipient,
+    )
+
+    private val nextSessionId = AtomicLong()
+    private val sessions = ConcurrentHashMap<Long, Session>()
 
     /** Builds the endpoint that drives this plugin: an `EngineHost` or a `SourceHost`. */
     protected abstract fun createHost(transport: PluginTransport): AutoCloseable
 
     private val binder =
         object : IPluginService.Stub() {
-            override fun connect(callback: IPluginCallback): Int {
-                // A reconnecting host means the old one is gone; a dead connection left running
-                // leaks an engine's runtime or keeps a source emitting into nothing.
-                host?.close()
-                val t = ServicePluginTransport(callback)
-                transport = t
-                host = createHost(t)
-                return ProtocolVersion.CURRENT
+            override fun protocolVersion(): Int = ProtocolVersion.CURRENT
+
+            override fun open(callback: IPluginCallback): Long {
+                val id = nextSessionId.incrementAndGet()
+                val transport = ServicePluginTransport(callback)
+                val host =
+                    try {
+                        createHost(transport)
+                    } catch (e: Exception) {
+                        transport.close()
+                        throw e
+                    }
+                val recipient = IBinder.DeathRecipient { closeSession(id) }
+                sessions[id] = Session(callback, transport, host, recipient)
+                try {
+                    callback.asBinder().linkToDeath(recipient, 0)
+                } catch (e: Exception) {
+                    closeSession(id)
+                    throw e
+                }
+                return id
             }
 
-            override fun send(frame: ByteArray) {
-                transport?.receive(frame)
+            override fun send(sessionId: Long, frame: ByteArray) {
+                sessions[sessionId]?.transport?.receive(frame)
             }
 
             override fun sendBlob(
-                id: Long,
+                sessionId: Long,
+                blobId: Long,
                 shm: SharedMemory,
             ) {
-                transport?.receiveBlob(id, shm)
+                sessions[sessionId]?.transport?.receiveBlob(blobId, shm)
             }
+
+            override fun close(sessionId: Long) = closeSession(sessionId)
         }
 
     final override fun onBind(intent: Intent?): IBinder = binder
 
-    /** What the plugin registered on the application context would otherwise outlive the service. */
+    private fun closeSession(id: Long) {
+        val session = sessions.remove(id) ?: return
+        runCatching { session.callback.asBinder().unlinkToDeath(session.deathRecipient, 0) }
+        runCatching { session.host.close() }
+        session.transport.close()
+    }
+
     final override fun onDestroy() {
-        host?.close()
-        host = null
-        transport = null
+        sessions.keys.toList().forEach(::closeSession)
         super.onDestroy()
     }
 }

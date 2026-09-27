@@ -4,16 +4,13 @@ package com.xfl.msgbot.plugin.ipc;
 import com.xfl.msgbot.plugin.ipc.IPluginCallback;
 import android.os.SharedMemory;
 
-// Engine plugin service. Frames are the PluginProtocol byte frames.
+// One service can host independent project sessions.
 interface IPluginService {
-    // Register the host callback; returns the plugin's protocol version.
-    int connect(IPluginCallback callback);
+    int protocolVersion();
+    long open(IPluginCallback callback);
 
-    // Host -> plugin frame. oneway: async.
-    oneway void send(in byte[] frame);
+    oneway void send(long sessionId, in byte[] frame);
 
-    // Host -> plugin large payload, handed over before the frame that refers to it by id.
-    // A frame is a byte array, so a big one would have to be inlined and risk
-    // TransactionTooLarge. oneway calls on one interface keep their order, so this lands first.
-    oneway void sendBlob(long id, in SharedMemory shm);
+    oneway void sendBlob(long sessionId, long blobId, in SharedMemory shm);
+    void close(long sessionId);
 }
