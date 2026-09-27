@@ -8,6 +8,7 @@ package com.xfl.msgbot.plugin.api.transport
 import com.xfl.msgbot.plugin.api.bridge.CallResult
 import com.xfl.msgbot.plugin.api.bridge.CapabilityException
 import com.xfl.msgbot.plugin.api.provider.CapabilityProvider
+import com.xfl.msgbot.plugin.api.provider.ProviderCall
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicBoolean
@@ -35,7 +36,7 @@ class ProviderHost(
                     return@execute
                 }
                 provider.bindSink { event ->
-                    if (!closed.get()) transport.send(ProviderProtocol.encode(ProviderProtocol.Frame.Event(event), transport.outbound()))
+                    if (!closed.get()) transport.send(ProviderProtocol.encode(ProviderProtocol.Frame.Event(event.projectId, event.payload), transport.outbound()))
                 }
                 val d = provider.descriptor
                 transport.send(ProviderProtocol.encode(ProviderProtocol.Frame.Describe(d.providerId, d.displayName, d.capabilities, d.events, d.namespace), transport.outbound()))
@@ -68,7 +69,7 @@ class ProviderHost(
                 // The caller is blocked on this, so a throw must come back as an answer.
                 val result =
                     try {
-                        CallResult.of(provider.call(frame.method, frame.args))
+                        CallResult.of(provider.call(ProviderCall(frame.projectId, frame.method, frame.args)))
                     } catch (e: CapabilityException) {
                         CallResult.Err(e.code, e.message ?: e.code)
                     } catch (e: Exception) {

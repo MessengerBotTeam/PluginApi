@@ -5,7 +5,6 @@
 
 package com.xfl.msgbot.plugin.api.provider
 
-import com.xfl.msgbot.plugin.api.protocol.Events
 import com.xfl.msgbot.plugin.api.value.Value
 
 /**
@@ -20,18 +19,18 @@ import com.xfl.msgbot.plugin.api.value.Value
 interface CapabilityProvider : AutoCloseable {
     val descriptor: ProviderDescriptor
 
-    /** Bind the channel this source pushes events into. Called before [start]. */
+    /** Bind the channel this provider pushes events into. Called before [start]. */
     fun bindSink(sink: ProviderEventSink)
 
     /**
-     * Execute a capability this source declared ([ProviderDescriptor.capabilities]). Tokens in
-     * [args] are the ones this source put in the event it emitted. Fail by throwing
+     * Execute a declared capability for one project. Tokens in [ProviderCall.args] are the ones
+     * the provider put in an event it emitted. Fail by throwing
      * ([com.xfl.msgbot.plugin.api.bridge.CapabilityException] to name the kind); the failure
      * travels back to the script as an answer.
      */
-    fun call(method: String, args: List<Value>): Value
+    fun call(call: ProviderCall): Value
 
-    /** Begin emitting. The host starts a source only while some project actually uses it. */
+    /** Begin emitting. The host starts a provider only while some project uses it. */
     fun start()
 
     fun stop()
@@ -39,9 +38,15 @@ interface CapabilityProvider : AutoCloseable {
     override fun close() = stop()
 }
 
-/** Where a source pushes events. The host fans them out to the projects using that source. */
+/** One call carries the caller's project identity without binding a provider per project. */
+data class ProviderCall(val projectId: String, val method: String, val args: List<Value>)
+
+/** A null target broadcasts to subscribed projects; otherwise delivery is limited to one. */
+data class ProviderEvent(val projectId: String?, val payload: Value.VObject)
+
+/** Where a provider pushes events. */
 fun interface ProviderEventSink {
-    fun emit(event: Value.VObject)
+    fun emit(event: ProviderEvent)
 }
 
 /** A provider of events and capabilities, independent of the language engine. */
@@ -50,8 +55,8 @@ data class ProviderDescriptor(
     val displayName: String,
     /** What [CapabilityProvider.call] will execute. */
     val capabilities: List<String>,
-    /** Event types this source emits. A listener for anything else would wait forever. */
-    val events: List<String> = listOf(Events.MESSAGE),
+    /** Event types this provider emits. */
+    val events: List<String> = emptyList(),
     /** Capability namespace. Messaging sources use `bot`; other providers own their own namespace. */
     val namespace: String = "bot",
 )

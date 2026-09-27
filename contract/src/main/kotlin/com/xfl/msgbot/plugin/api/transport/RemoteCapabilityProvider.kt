@@ -8,6 +8,8 @@ package com.xfl.msgbot.plugin.api.transport
 import com.xfl.msgbot.plugin.api.bridge.CallResult
 import com.xfl.msgbot.plugin.api.bridge.CapabilityException
 import com.xfl.msgbot.plugin.api.provider.ProviderEventSink
+import com.xfl.msgbot.plugin.api.provider.ProviderCall
+import com.xfl.msgbot.plugin.api.provider.ProviderEvent
 import com.xfl.msgbot.plugin.api.provider.CapabilityProvider
 import com.xfl.msgbot.plugin.api.provider.ProviderDescriptor
 import com.xfl.msgbot.plugin.api.value.Value
@@ -66,9 +68,9 @@ class RemoteCapabilityProvider(
     }
 
     /** A failure comes back as a [CapabilityException]; the dispatcher turns it into [CallResult.Err]. */
-    override fun call(method: String, args: List<Value>): Value {
+    override fun call(call: ProviderCall): Value {
         val id = callSeq.incrementAndGet()
-        val result = request(id, ProviderProtocol.Frame.Call(id, method, args), method)
+        val result = request(id, ProviderProtocol.Frame.Call(id, call.projectId, call.method, call.args), call.method)
         return when (result) {
             is CallResult.Ok -> result.value
             is CallResult.Err -> throw CapabilityException(result.code, result.message)
@@ -113,7 +115,7 @@ class RemoteCapabilityProvider(
     private fun onFrame(bytes: ByteArray) {
         if (closed.get()) return
         when (val frame = ProviderProtocol.decode(bytes, transport.inbound())) {
-            is ProviderProtocol.Frame.Event -> sink?.emit(frame.event)
+            is ProviderProtocol.Frame.Event -> sink?.emit(ProviderEvent(frame.projectId, frame.event))
             is ProviderProtocol.Frame.CallResult -> pendingCalls.remove(frame.id)?.complete(frame.result)
             is ProviderProtocol.Frame.StartResult -> pendingCalls.remove(frame.id)?.complete(frame.result)
             is ProviderProtocol.Frame.Error -> {
