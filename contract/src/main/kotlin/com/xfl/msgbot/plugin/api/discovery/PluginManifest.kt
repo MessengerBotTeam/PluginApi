@@ -46,16 +46,11 @@ data class PluginManifest(
         STRING,
     }
 
-    /**
-     * One language an engine runs, with everything the host needs before it can bind that engine:
-     * what to call the file, how to colour it, what to put in it.
-     */
+    /** One language an engine runs. Script API profiles are declared separately. */
     data class LanguageSupport(
         val name: String,
         val label: String,
         val extension: String,
-        /** apiLevel -> starter template. A key here is a combination this engine really runs. */
-        val apiLevels: Map<String, TemplateRef>,
         val editorScope: String? = null,
         val grammar: TemplateRef? = null,
         val icon: Int? = null,
@@ -72,6 +67,8 @@ data class PluginManifest(
 
         /** A provider of namespaced capabilities and events, selected per project. */
         const val EXTENSION_SERVICE_ACTION = "com.xfl.msgbot.plugin.EXTENSION"
+        const val PROFILE_SERVICE_ACTION = "com.xfl.msgbot.plugin.PROFILE"
+        const val META_PROFILES = "com.xfl.msgbot.plugin.profiles"
 
         /**
          * Source identity, the open string a project points at. All a source declares here: its

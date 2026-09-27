@@ -14,14 +14,12 @@ package com.xfl.msgbot.plugin.api.discovery
  * ```xml
  * <engine id="chaquopy-python">
  *   <language name="python" label="@string/lang_python" extension="py"
- *             editorScope="source.python" grammar="@raw/python_tm" icon="@drawable/ic_python">
- *     <apiLevel name="API2" template="@raw/tpl_api2_py"/>
- *   </language>
+ *             editorScope="source.python" grammar="@raw/python_tm" icon="@drawable/ic_python"/>
  *   <option key="venv" type="boolean" label="@string/opt_venv" default="true"/>
  * </engine>
  * ```
  *
- * Read before binding: the host needs this to offer the language, create a project and open the
+ * Read before binding: the host needs this to offer the language and open the
  * editor, when no engine exists yet to be asked. The same schema and parser serve plugins and the
  * app's builtins; a document may hold more than one `<engine>` (the root element is not read).
  */
@@ -31,7 +29,6 @@ object EngineManifestSchema {
 
     const val TAG_ENGINE = "engine"
     const val TAG_LANGUAGE = "language"
-    const val TAG_API_LEVEL = "apiLevel"
 
     /** A per-project setting this engine takes; the host renders it and hands the answer back on `load`. */
     const val TAG_OPTION = "option"
@@ -56,9 +53,6 @@ object EngineManifestSchema {
 
     /** Language icon as `@drawable/...`. Absent falls back to a generic one. */
     const val ATTR_ICON = "icon"
-
-    /** Starter script for a new project, as `@raw/...`. Required on every `<apiLevel>`. */
-    const val ATTR_TEMPLATE = "template"
 
     /** Option identity on `<option>`, the key its value is stored and delivered under. */
     const val ATTR_KEY = "key"
