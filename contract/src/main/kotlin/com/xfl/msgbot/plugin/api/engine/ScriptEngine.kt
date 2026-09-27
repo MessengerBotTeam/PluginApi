@@ -28,12 +28,11 @@ interface ScriptEngine : AutoCloseable {
      * [language]: what [userScript] is written in; a single-language engine may ignore it.
      * [capabilities]: must be bound as a global `__caps` (data, not generated source) before the
      * shim runs, so the shim can gate its API surface.
-     * [shim]: empty means the host has none for [language]; the engine supplies its own.
+     * [shim]: the selected script profile's language-specific facade.
      * [options]: this engine's per-project settings, carried by the host unread.
      */
     fun load(
         language: String,
-        apiLevel: String,
         capabilities: List<String>,
         shim: String,
         userScript: String,

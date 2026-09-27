@@ -22,7 +22,6 @@ object PluginProtocol {
     private const val SCRIPT = "c"
     private const val CAPS = "p"
     private const val LANGUAGE = "l"
-    private const val API_LEVEL = "al"
     private const val OPTIONS = "o"
 
     private const val K_LOAD = 1L
@@ -36,12 +35,11 @@ object PluginProtocol {
     private const val K_ERROR = 9L
 
     sealed interface Frame {
-        /** [shim] empty => the plugin supplies its own shim for [apiLevel]. */
+        /** The profile shim is opaque source in [language]; the engine never selects an API. */
         data class Load(
             val id: Long,
             /** Which language [userScript] is written in; a polyglot engine cannot infer it. */
             val language: String,
-            val apiLevel: String,
             val capabilities: List<String>,
             val shim: String,
             val userScript: String,
@@ -80,7 +78,6 @@ object PluginProtocol {
                         K_LOAD,
                         ID to int(frame.id),
                         LANGUAGE to str(frame.language),
-                        API_LEVEL to str(frame.apiLevel),
                         CAPS to strs(frame.capabilities),
                         SHIM to str(frame.shim),
                         SCRIPT to str(frame.userScript),
@@ -105,7 +102,6 @@ object PluginProtocol {
                     Frame.Load(
                         intOf(map, ID),
                         strOf(map, LANGUAGE),
-                        strOf(map, API_LEVEL),
                         strsOf(map, CAPS),
                         strOf(map, SHIM),
                         strOf(map, SCRIPT),

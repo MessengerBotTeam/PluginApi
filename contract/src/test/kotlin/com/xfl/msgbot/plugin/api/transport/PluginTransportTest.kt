@@ -36,7 +36,6 @@ class PluginTransportTest {
 
         override fun load(
             language: String,
-            apiLevel: String,
             capabilities: List<String>,
             shim: String,
             userScript: String,
@@ -75,7 +74,7 @@ class PluginTransportTest {
         host.bindHost(hostBridge)
         EngineHost(pluginT, { FakeEngine() })
 
-        host.load("test", "API2", listOf("reply"), "<shim>", "<script>")
+        host.load("test", listOf("reply"), "<shim>", "<script>")
         host.dispatch(
             Value.VObject(
                 mapOf(
@@ -100,7 +99,7 @@ class PluginTransportTest {
         host.bindHost { _, _ -> CallResult.Err(CallResult.Code.FAILED, "no network") }
         EngineHost(pluginT, { engine })
 
-        host.load("test", "API2", listOf("reply"), "<shim>", "<script>")
+        host.load("test", listOf("reply"), "<shim>", "<script>")
         host.dispatch(Value.VObject(mapOf("content" to Value.VString("hi"))))
 
         val result = awaitResult(engine)
@@ -120,7 +119,7 @@ class PluginTransportTest {
         host.bindHost { _, _ -> throw IllegalStateException("backend exploded") }
         EngineHost(pluginT, { engine })
 
-        host.load("test", "API2", listOf("reply"), "<shim>", "<script>")
+        host.load("test", listOf("reply"), "<shim>", "<script>")
         host.dispatch(Value.VObject(mapOf("content" to Value.VString("hi"))))
 
         // Without the host answering at all, this would block for the full call timeout.
@@ -139,7 +138,7 @@ class PluginTransportTest {
 
         // Keys the host has never heard of: that is the point. A closed type here would put the
         // host back in the business of knowing what every engine can be told.
-        host.load("test", "API2", emptyList(), "<shim>", "<script>", mapOf("npm" to "true", "registry" to "https://x"))
+        host.load("test", emptyList(), "<shim>", "<script>", mapOf("npm" to "true", "registry" to "https://x"))
 
         val deadline = System.currentTimeMillis() + 5_000
         while (engine.loadedOptions == null && System.currentTimeMillis() < deadline) Thread.sleep(10)
@@ -154,31 +153,28 @@ class PluginTransportTest {
             object : ScriptEngine by FakeEngine() {
                 override fun load(
                     language: String,
-                    apiLevel: String,
                     capabilities: List<String>,
                     shim: String,
                     userScript: String,
                     options: Map<String, String>,
-                ): Unit = throw IllegalStateException("no shim for apiLevel '$apiLevel'")
+                ): Unit = throw IllegalStateException("bad profile shim")
             }
 
         val reported = LinkedBlockingQueue<String>()
         EngineHost(pluginT, { refusing }, onError = { reported.put(it) })
         val host = RemoteScriptEngine(hostT, EngineDescriptor("remote", "Remote", listOf("test")))
 
-        // A plugin may advertise an apiLevel it has no shim for: the descriptor the host reads and
-        // the engine's own list are two lists, and nothing makes them agree. When they drift, the
-        // script simply never loads -- and before the Load ack, the compile that sent it reported
-        // success while the bot just sat there doing nothing.
+        // A profile can supply invalid source. The engine must answer the load while the host can
+        // still report the compile failure to the user.
         val started = System.currentTimeMillis()
-        val error = runCatching { host.load("test", "API3", emptyList(), "", "<script>") }.exceptionOrNull()
+        val error = runCatching { host.load("test", emptyList(), "<bad shim>", "<script>") }.exceptionOrNull()
         val elapsed = System.currentTimeMillis() - started
 
-        assertTrue(error?.message?.contains("API3") == true, "the load call itself should fail, got: ${error?.message}")
+        assertTrue(error?.message?.contains("bad profile shim") == true, "the load call itself should fail, got: ${error?.message}")
         assertTrue(elapsed < 5_000, "the refusal should come as an answer, not a timeout; took ${elapsed}ms")
 
         val message = reported.poll(5, TimeUnit.SECONDS)
-        assertTrue(message?.contains("API3") == true, "the plugin's own log should hear it too, got: $message")
+        assertTrue(message?.contains("bad profile shim") == true, "the plugin's own log should hear it too, got: $message")
     }
 
     @Test
@@ -194,7 +190,7 @@ class PluginTransportTest {
         val host =
             RemoteScriptEngine(hostT, EngineDescriptor("remote", "Remote", listOf("test")), onError = { heard.put(it) })
 
-        host.load("test", "API2", emptyList(), "<shim>", "<script>")
+        host.load("test", emptyList(), "<shim>", "<script>")
         // Dispatch is one-way: nothing waits on it, so its failure needs a frame of its own.
         host.dispatch(Value.VObject(mapOf("type" to Value.VString("message"))))
 
@@ -240,7 +236,7 @@ class PluginTransportTest {
         // RejectedExecutionException out of the transport callback -- a crash on a device.
         pluginSide.close()
         host.dispatch(Value.VObject(mapOf("type" to Value.VString("message"))))
-        runCatching { host.load("test", "API2", emptyList(), "<shim>", "<script>") }
+        runCatching { host.load("test", emptyList(), "<shim>", "<script>") }
         Thread.sleep(100)
 
         // Getting here at all is the assertion: the late frames were dropped instead of thrown.
@@ -270,15 +266,13 @@ class PluginTransportTest {
     }
 
     @Test
-    fun `capabilities reach a plugin that supplies its own shim`() {
+    fun `capabilities reach an engine alongside a profile shim`() {
         val (hostT, pluginT) = LoopbackTransport.pair()
         val engine = FakeEngine()
         val host = RemoteScriptEngine(hostT, EngineDescriptor("remote", "Remote", listOf("lua")))
-        // Empty shim: the host has none for this language, so the plugin falls back to its own.
-        // Capabilities must still arrive, otherwise that shim cannot gate its API surface.
-        EngineHost(pluginT, { engine }, shimProvider = { _, _ -> "-- own shim" })
+        EngineHost(pluginT, { engine })
 
-        host.load("lua", "API2", listOf("reply", "log"), "", "<script>")
+        host.load("lua", listOf("reply", "log"), "-- profile shim", "<script>")
 
         val deadline = System.currentTimeMillis() + 5_000
         while (engine.loadedCaps == null && System.currentTimeMillis() < deadline) Thread.sleep(10)
@@ -291,12 +285,9 @@ class PluginTransportTest {
         val (hostT, pluginT) = LoopbackTransport.pair()
         val engine = FakeEngine()
         val host = RemoteScriptEngine(hostT, EngineDescriptor("remote", "Remote", listOf("javascript", "python")))
-        // An engine running several languages cannot tell them apart from the source, so the shim
-        // it falls back to is chosen by language: picking by "any language it supports" would hand
-        // a Python script the JavaScript shim.
-        EngineHost(pluginT, { engine }, shimProvider = { language, _ -> "# shim for $language" })
+        EngineHost(pluginT, { engine })
 
-        host.load("python", "API2", listOf("reply"), "", "print()")
+        host.load("python", listOf("reply"), "# shim for python", "print()")
 
         val deadline = System.currentTimeMillis() + 5_000
         while (engine.loadedShim == null && System.currentTimeMillis() < deadline) Thread.sleep(10)

@@ -52,14 +52,13 @@ class RemoteScriptEngine(
      */
     override fun load(
         language: String,
-        apiLevel: String,
         capabilities: List<String>,
         shim: String,
         userScript: String,
         options: Map<String, String>,
     ) {
         val result =
-            request { id -> PluginProtocol.Frame.Load(id, language, apiLevel, capabilities, shim, userScript, options) }
+            request { id -> PluginProtocol.Frame.Load(id, language, capabilities, shim, userScript, options) }
                 ?: throw IllegalStateException("The plugin did not answer the load within ${callTimeoutMs}ms")
         if (result is CallResult.Err) throw IllegalStateException("load failed: ${result.message}")
     }

@@ -29,10 +29,6 @@ class EngineHost(
     private val transport: PluginTransport,
     engineFactory: () -> ScriptEngine,
     private val callTimeoutMs: Long = 30_000,
-    /**
-     * This plugin's own shim, used when the host sends an empty one. Null means "no shim".
-     */
-    private val shimProvider: (language: String, apiLevel: String) -> String? = { _, _ -> null },
     /** Told when one-way work (load/dispatch) fails; the exception has nowhere else to surface. */
     private val onError: (String) -> Unit = {},
 ) : AutoCloseable {
@@ -83,12 +79,11 @@ class EngineHost(
                 // The compile that sent this is waiting on the answer, so a throw must become one.
                 val answer =
                     try {
-                        // Empty shim => the host has none for this language; fall back to our own.
-                        val shim = frame.shim.ifEmpty { shimProvider(frame.language, frame.apiLevel).orEmpty() }
-                        engine.load(frame.language, frame.apiLevel, frame.capabilities, shim, frame.userScript, frame.options)
+                        require(frame.shim.isNotEmpty()) { "A script profile must supply a shim" }
+                        engine.load(frame.language, frame.capabilities, frame.shim, frame.userScript, frame.options)
                         CallResult.of(Value.VNull)
                     } catch (e: Exception) {
-                        val message = "load ${frame.language}/${frame.apiLevel} failed: ${e.message ?: e.javaClass.simpleName}"
+                        val message = "load ${frame.language} failed: ${e.message ?: e.javaClass.simpleName}"
                         onError(message)
                         CallResult.failed(message)
                     }
