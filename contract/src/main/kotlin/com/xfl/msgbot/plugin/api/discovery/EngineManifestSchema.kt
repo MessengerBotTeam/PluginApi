@@ -31,7 +31,7 @@ object EngineManifestSchema {
     const val TAG_LANGUAGE = "language"
 
     /** A per-project setting this engine takes; the host renders it and hands the answer back on `load`. */
-    const val TAG_OPTION = "option"
+    const val TAG_OPTION = PluginOptionSchema.TAG_OPTION
 
     /** Engine identity on `<engine>`, the open string a project points at (e.g. "javet-node"). */
     const val ATTR_ID = "id"
@@ -55,17 +55,17 @@ object EngineManifestSchema {
     const val ATTR_ICON = "icon"
 
     /** Option identity on `<option>`, the key its value is stored and delivered under. */
-    const val ATTR_KEY = "key"
+    const val ATTR_KEY = PluginOptionSchema.ATTR_KEY
 
     /** One of [OPTION_BOOLEAN] or [OPTION_STRING]; any other type is dropped rather than guessed at. */
-    const val ATTR_TYPE = "type"
+    const val ATTR_TYPE = PluginOptionSchema.ATTR_TYPE
 
     /** Rendered as a switch. Values travel as "true"/"false". */
-    const val OPTION_BOOLEAN = "boolean"
+    const val OPTION_BOOLEAN = PluginOptionSchema.TYPE_BOOLEAN
 
     /** Rendered as a text field. */
-    const val OPTION_STRING = "string"
+    const val OPTION_STRING = PluginOptionSchema.TYPE_STRING
 
     /** Value an `<option>` starts at, as a string. Absent means "" (or false for a boolean). */
-    const val ATTR_DEFAULT = "default"
+    const val ATTR_DEFAULT = PluginOptionSchema.ATTR_DEFAULT
 }

@@ -23,6 +23,7 @@ object ProviderProtocol {
     private const val EVENTS = "ev"
     private const val NAMESPACE = "ns"
     private const val PROJECT_ID = "project"
+    private const val OPTIONS = "opts"
 
     private const val K_START = 1L
     private const val K_STOP = 2L
@@ -34,7 +35,7 @@ object ProviderProtocol {
     private const val K_ERROR = 8L
 
     sealed interface Frame {
-        data class Start(val id: Long) : Frame
+        data class Start(val id: Long, val projects: Map<String, Map<String, String>> = emptyMap()) : Frame
         object Stop : Frame
         data class Call(val id: Long, val projectId: String, val method: String, val args: List<Value>) : Frame
         data class Event(val projectId: String?, val event: Value.VObject) : Frame
@@ -63,7 +64,7 @@ object ProviderProtocol {
     private fun toValue(frame: Frame): Value =
         with(FrameCodec) {
             when (frame) {
-                is Frame.Start -> obj(K_START, ID to int(frame.id))
+                is Frame.Start -> obj(K_START, ID to int(frame.id), OPTIONS to projectsValue(frame.projects))
                 is Frame.Stop -> obj(K_STOP)
                 is Frame.Call -> obj(K_CALL, ID to int(frame.id), PROJECT_ID to str(frame.projectId), METHOD to str(frame.method), ARGS to Value.VArray(frame.args))
                 is Frame.Event -> obj(K_EVENT, PROJECT_ID to (frame.projectId?.let { str(it) } ?: Value.VNull), VALUE to frame.event)
@@ -86,7 +87,7 @@ object ProviderProtocol {
         val map = (value as Value.VObject).entries
         return with(FrameCodec) {
             when (kindOf(map)) {
-                K_START -> Frame.Start(intOf(map, ID))
+                K_START -> Frame.Start(intOf(map, ID), projectsOf(map[OPTIONS]))
                 K_STOP -> Frame.Stop
                 K_CALL -> Frame.Call(intOf(map, ID), strOf(map, PROJECT_ID), strOf(map, METHOD), (map.getValue(ARGS) as Value.VArray).items)
                 K_EVENT -> Frame.Event((map[PROJECT_ID] as? Value.VString)?.value, map.getValue(VALUE) as Value.VObject)
@@ -98,4 +99,12 @@ object ProviderProtocol {
             }
         }
     }
+
+    private fun projectsValue(projects: Map<String, Map<String, String>>): Value.VObject =
+        Value.VObject(projects.mapValues { (_, options) -> Value.VObject(options.mapValues { (_, value) -> Value.VString(value) }) })
+
+    private fun projectsOf(value: Value?): Map<String, Map<String, String>> =
+        (value as? Value.VObject)?.entries?.mapValues { (_, options) ->
+            (options as Value.VObject).entries.mapValues { (_, setting) -> (setting as Value.VString).value }
+        }.orEmpty()
 }

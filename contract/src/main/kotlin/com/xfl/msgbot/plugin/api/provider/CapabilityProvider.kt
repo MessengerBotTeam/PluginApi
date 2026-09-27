@@ -29,6 +29,13 @@ interface CapabilityProvider : AutoCloseable {
      */
     fun call(call: ProviderCall): Value
 
+    /**
+     * Per-project settings for every active project selecting this provider. Called on the
+     * provider thread before [start]. Keys are local to this provider; the host never interprets
+     * values. Reconfiguration stops and starts the provider with a new snapshot.
+     */
+    fun configure(projects: Map<String, Map<String, String>>) = Unit
+
     /** Begin emitting. The host starts a provider only while some project uses it. */
     fun start()
 

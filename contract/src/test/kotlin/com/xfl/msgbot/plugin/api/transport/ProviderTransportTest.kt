@@ -25,8 +25,14 @@ class ProviderTransportTest {
     private class FakeSource(private val failStart: Boolean = false) : CapabilityProvider {
         override val descriptor = ProviderDescriptor("fake-source", "Fake", listOf("reply", "send"))
         lateinit var sink: ProviderEventSink
+        var configuredProjects: Map<String, Map<String, String>> = emptyMap()
+        var projectsAtStart: Map<String, Map<String, String>> = emptyMap()
 
         override fun bindSink(sink: ProviderEventSink) { this.sink = sink }
+
+        override fun configure(projects: Map<String, Map<String, String>>) {
+            configuredProjects = projects
+        }
 
         override fun call(call: ProviderCall): Value =
             when (call.method) {
@@ -36,10 +42,29 @@ class ProviderTransportTest {
             }
 
         override fun start() {
+            projectsAtStart = configuredProjects
             if (failStart) error("account is not ready")
         }
 
         override fun stop() = Unit
+    }
+
+    @Test
+    fun `provider receives isolated project options before it starts`() {
+        val (hostSide, pluginSide) = LoopbackTransport.pair()
+        val provider = FakeSource()
+        val remote = RemoteCapabilityProvider(hostSide)
+        val host = ProviderHost(pluginSide) { provider }
+        try {
+            assertNotNull(remote.awaitDescriptor())
+            val projects = mapOf("A" to mapOf("token" to "one"), "B" to mapOf("token" to "two"))
+            remote.configure(projects)
+            remote.start()
+            assertEquals(projects, provider.configuredProjects)
+            assertEquals(projects, provider.projectsAtStart)
+        } finally {
+            host.close()
+        }
     }
 
     @Test

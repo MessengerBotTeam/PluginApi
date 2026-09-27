@@ -53,6 +53,7 @@ class ProviderHost(
         when (val frame = ProviderProtocol.decode(bytes, transport.inbound())) {
             is ProviderProtocol.Frame.Start -> submit {
                 val result = try {
+                    provider.configure(frame.projects)
                     provider.start()
                     CallResult.of(com.xfl.msgbot.plugin.api.value.Value.VNull)
                 } catch (e: Exception) {

@@ -41,6 +41,7 @@ class RemoteCapabilityProvider(
     @Volatile private var sink: ProviderEventSink? = null
 
     @Volatile private var current: ProviderDescriptor? = null
+    @Volatile private var projects: Map<String, Map<String, String>> = emptyMap()
 
     /** Valid only after [awaitDescriptor] has returned non-null. */
     override val descriptor: ProviderDescriptor
@@ -67,6 +68,10 @@ class RemoteCapabilityProvider(
         this.sink = sink
     }
 
+    override fun configure(projects: Map<String, Map<String, String>>) {
+        this.projects = projects.mapValues { (_, options) -> options.toMap() }
+    }
+
     /** A failure comes back as a [CapabilityException]; the dispatcher turns it into [CallResult.Err]. */
     override fun call(call: ProviderCall): Value {
         val id = callSeq.incrementAndGet()
@@ -79,7 +84,7 @@ class RemoteCapabilityProvider(
 
     override fun start() {
         val id = callSeq.incrementAndGet()
-        when (val result = request(id, ProviderProtocol.Frame.Start(id), "start")) {
+        when (val result = request(id, ProviderProtocol.Frame.Start(id, projects), "start")) {
             is CallResult.Ok -> Unit
             is CallResult.Err -> throw IllegalStateException(result.message)
         }

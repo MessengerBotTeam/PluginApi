@@ -17,7 +17,7 @@ data class PluginManifest(
     val serviceClass: String,
     /** What this engine runs. Empty for a source, which runs nothing. */
     val languages: List<LanguageSupport> = emptyList(),
-    /** Per-project settings this engine takes. The host offers them and does not read them. */
+    /** Per-project settings this plugin takes. The host offers them and does not read them. */
     val options: List<OptionDecl> = emptyList(),
     val protocolVersion: Int = ProtocolVersion.CURRENT,
     val abis: List<String> = emptyList(),
@@ -29,7 +29,7 @@ data class PluginManifest(
         val options: List<OptionDecl> = emptyList(),
     )
 
-    /** One per-project setting; the host stores [key] and hands it back on `load`, unread. */
+    /** One per-project setting; the host stores [key] under the owning plugin ID. */
     data class OptionDecl(
         val key: String,
         val type: OptionType,
@@ -77,6 +77,8 @@ data class PluginManifest(
         const val META_SOURCE_ID = "com.xfl.msgbot.plugin.sourceId"
         const val META_EXTENSION_ID = "com.xfl.msgbot.plugin.extensionId"
         const val META_EXTENSION_NAMESPACE = "com.xfl.msgbot.plugin.namespace"
+        /** XML resource containing `<options><option .../></options>` for a source or extension. */
+        const val META_OPTIONS = "com.xfl.msgbot.plugin.options"
 
         /** Signature-level permission guarding the plugin service (host signing key). */
         const val PLUGIN_PERMISSION = "com.xfl.msgbot.permission.PLUGIN"
