@@ -1,6 +1,6 @@
 # JavaScript 바인딩
 
-JavaScript 엔진이 스크립트 전역에 만들어야 하는 것과, `Value`를 JavaScript 값으로 바꾸는 규칙이다. 이 규칙은 엔진마다 한 번씩만 구현한다. 엔진이 이 규칙을 지키면 JavaScript 프로필(API2, Legacy 등)은 어느 엔진에서든 수정 없이 실행된다.
+JavaScript 엔진이 스크립트 전역에 만들어야 하는 것과, `Value`를 JavaScript 값으로 바꾸는 규칙이다. JavaScript는 앱이 직접 실행하는 언어라서 이 바인딩은 계약의 일부다. 엔진은 이 규칙을 한 번 구현하면 된다. 이 규칙을 지키는 엔진에서는 모든 JavaScript 프로필이 수정 없이 실행된다. 앱의 API2와 Legacy도, 플러그인이 내는 프로필도 마찬가지다. 다른 언어의 바인딩은 그 언어를 추가하는 플러그인이 정한다([새 언어 추가](README.md)).
 
 규칙은 `PluginApi-tck`의 `JavaScriptEngineConformance`가 테스트로 검사한다. 엔진 저장소의 테스트 소스에서 이 클래스를 상속하면 된다.
 
@@ -48,7 +48,7 @@ class MyEngineConformanceTest : JavaScriptEngineConformance() {
 키트를 불러오면 `__dispatch`가 설치되고 `sys.listen`이 호출된다. 그 뒤로는 리스너가 있는 이벤트만 엔진에 전달되므로, 듣지 않는 이벤트 때문에 원격 엔진과 IPC가 오가지 않는다.
 
 ```js
-// API3 같은 프로필의 전부
+// 다른 개발자가 플러그인으로 내는 새 API의 전부: 이벤트마다 함수 하나, Promise 중심
 const { api, events } = require('msgbot');
 globalThis.onMessage = (handler) => events.on('bot.message', (m) => handler({
   text: m.content, room: m.room, sender: m.author.name,

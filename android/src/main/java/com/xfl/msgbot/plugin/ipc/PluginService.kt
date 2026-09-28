@@ -20,7 +20,8 @@ import java.util.concurrent.atomic.AtomicLong
 
 /**
  * The one service a plugin APK exposes. Say what it contains, keyed by the IDs in its
- * `msgbot_plugin.xml`, and everything else (sessions, threads, Binder) is done here:
+ * `msgbot_plugin.xml`, and everything else (sessions, threads, Binder) is done here. A plugin that
+ * adds Lua and a weather module, say:
  *
  * ```kotlin
  * class MyPluginService : PluginService() {

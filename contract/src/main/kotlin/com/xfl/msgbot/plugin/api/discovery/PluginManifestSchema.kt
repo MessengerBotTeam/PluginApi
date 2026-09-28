@@ -16,6 +16,10 @@ package com.xfl.msgbot.plugin.api.discovery
  *     <meta-data android:name="com.xfl.msgbot.plugin" android:resource="@xml/msgbot_plugin" />
  * </service>
  * ```
+ *
+ * For example, a plugin that adds Lua (an engine and a Lua API for it) and a source that reads the
+ * messenger's database directly:
+ *
  * ```xml
  * <msgbot-plugin protocol="4">
  *     <engine id="luaj">
