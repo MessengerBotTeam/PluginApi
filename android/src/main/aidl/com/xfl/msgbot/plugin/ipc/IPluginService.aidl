@@ -4,13 +4,17 @@ package com.xfl.msgbot.plugin.ipc;
 import com.xfl.msgbot.plugin.ipc.IPluginCallback;
 import android.os.SharedMemory;
 
-// One service can host independent project sessions.
+// Host -> plugin. One service hosts any number of independent sessions, one per project and role.
 interface IPluginService {
     int protocolVersion();
-    long open(String action, IPluginCallback callback);
 
-    oneway void send(long sessionId, in byte[] frame);
+    // role is PluginRole.ENGINE or PluginRole.PROVIDER; component is the manifest id.
+    long open(String role, String component, IPluginCallback callback);
 
-    oneway void sendBlob(long sessionId, long blobId, in SharedMemory shm);
-    void close(long sessionId);
+    oneway void send(long session, in byte[] frame);
+
+    // Sent before the frame that refers to it; oneway calls on one binder keep their order.
+    oneway void sendShared(long session, long transferId, in SharedMemory region);
+
+    void close(long session);
 }
