@@ -18,7 +18,8 @@ class MyEngineConformanceTest : JavaScriptEngineConformance() {
 | `__host_call(name, args)` | 엔진 | 동기 호출. `args`는 이름 있는 인자를 담은 객체이며 결과 값을 반환한다. |
 | `__host_call_async(name, args)` | 엔진 | 비동기 호출. `Promise`를 반환하고 `then` 콜백은 엔진 스레드에서 실행된다. |
 | `__dispatch(name, payload)` | 프로필 | 이벤트 진입점. 정의하지 않았으면 이벤트는 무시된다. |
-| `require(specifier)` | 엔진 | 프로젝트 소스를 CommonJS 모듈로 읽는다. |
+| `require(specifier)` | 엔진 | 프로젝트 소스를 CommonJS 모듈로 읽는다. `require('msgbot')`는 프로필 키트를 준다. |
+| `globalThis` | 엔진 | 전역 객체. 키트와 프로필이 전역을 다룰 때 쓴다. |
 | `setTimeout` / `setInterval` / `clearTimeout` / `clearInterval` | 엔진 | 엔진 스레드에서 실행하며, 엔진을 닫으면 멈춘다. |
 
 `__api`의 각 원소는 `ModuleSpec.toValue()` 모양이다.
@@ -29,7 +30,31 @@ class MyEngineConformanceTest : JavaScriptEngineConformance() {
   events:    [{ name: 'alert', fields: [{ name: 'text', type: 'string', doc: '' }], doc: '' }] }
 ```
 
-프로필은 이 데이터로 API를 만든다. 위치 인자는 `params` 순서대로 이름을 붙여 `__host_call('weather.forecast', { city: 'Seoul' })`로 보낸다. 새 제공자를 설치해도 엔진과 프로필을 고칠 필요가 없다.
+프로필은 이 데이터로 API를 만든다. 위치 인자는 `params` 순서대로 이름을 붙여 `__host_call('weather.forecast', { city: 'Seoul' })`로 보낸다. 새 제공자를 설치해도 엔진과 프로필을 고칠 필요가 없다. 이런 공통 작업은 아래의 프로필 키트가 대신한다.
+
+## 프로필 키트: `require('msgbot')`
+
+모든 JavaScript 프로필이 필요로 하지만 취향과는 상관없는 부분을 모았다. 프로필은 자기 API의 모양만 작성하면 된다. 공유 로더(`JavaScriptBinding.MODULE_LOADER`)가 이 키트를 기본 모듈로 제공하므로, 그 로더를 쓰는 엔진은 따로 할 일이 없다.
+
+| 멤버 | 뜻 |
+|---|---|
+| `api.<ns>.<fn>(...)` | `__api`의 모든 함수. 위치 인자는 스키마 이름으로 전달한다. 평범한 객체 하나를 넘기면 이름 인자로 쓴다(첫 매개변수가 객체 타입이면 제외). |
+| `api.<ns>.<fn>.async(...)` | 같은 호출을 `Promise`로 받는다. |
+| `isAvailable(name)`, `spec(ns)` | 이 프로젝트에 해당 함수, 이벤트, 모듈이 있는지 확인한다. |
+| `events.on(name, fn)` / `once` / `off` / `count` | 한정된 이름(`bot.message`)으로 이벤트를 듣는다. 전달될 수 없는 이벤트면 바로 오류가 난다. |
+| `onError(error, event)` | 리스너가 실패했을 때 호출된다. 기본 동작은 프로젝트 로그에 기록하는 것이며, 교체할 수 있다. |
+| `describe(error)`, `base64(bytes)` | 엔진마다 다른 오류 형식을 하나의 문자열로 만들고, 바이트를 base64로 바꾼다. |
+
+키트를 불러오면 `__dispatch`가 설치되고 `sys.listen`이 호출된다. 그 뒤로는 리스너가 있는 이벤트만 엔진에 전달되므로, 듣지 않는 이벤트 때문에 원격 엔진과 IPC가 오가지 않는다.
+
+```js
+// API3 같은 프로필의 전부
+const { api, events } = require('msgbot');
+globalThis.onMessage = (handler) => events.on('bot.message', (m) => handler({
+  text: m.content, room: m.room, sender: m.author.name,
+  reply: (text) => api.bot.reply.async(m.replyToken, text),   // Promise 중심
+}));
+```
 
 ## 값
 
@@ -52,12 +77,16 @@ class MyEngineConformanceTest : JavaScriptEngineConformance() {
 
 스크립트를 로드하지 못하면 `EngineException`을 던진다. 이때 메시지에 파일 이름을 넣는다(예: `main.js:3: Unexpected token`). 아무도 기다리지 않는 작업에서 난 오류는 `EngineContext.reportError`로 보고한다. 타이머 콜백이나 처리되지 않은 Promise 거부가 여기에 해당한다.
 
+## 이벤트 구독
+
+호스트는 `sys.listen({events: [...]})`로 받은 이벤트만 엔진에 전달한다. 한 번도 호출하지 않았다면 모든 이벤트를 전달한다. 키트를 쓰면 리스너를 등록하거나 해제할 때 알아서 호출된다.
+
 ## 실행 순서
 
-1. `__api`, 호스트 호출 함수, 타이머, `require`를 전역에 둔다.
-2. 프로필(`LoadRequest.profile`)을 실행한다.
+1. `__api`, 호스트 호출 함수, 타이머, `require`, `globalThis`를 둔다.
+2. 프로필(`LoadRequest.profile`)을 실행한다. 프로필은 `require('msgbot')`를 쓸 수 있다.
 3. 진입 파일(`LoadRequest.entry`)을 전역 스크립트로 실행한다. 여기서 선언한 `function response`는 전역에 남는다.
 
-`require`는 `./`, `../`, `/`로 시작하는 경로를 프로젝트 소스에서 찾는다. 찾는 순서는 경로 그대로, `.js`, `.json`, `/index.js`다. 그 밖의 이름은 런타임 고유의 `require`에 넘긴다. Node의 내장 모듈이 그런 예이며, 고유 `require`가 없는 런타임에서는 오류가 난다. `JavaScriptBinding.MODULE_LOADER`에 이 규칙을 구현한 로더가 있으므로 엔진은 파일을 함수로 컴파일하는 방법만 제공하면 된다.
+`require`는 `./`, `../`, `/`로 시작하는 경로를 프로젝트 소스에서 찾는다. 찾는 순서는 경로 그대로, `.js`, `.json`, `/index.js`다. `msgbot`은 키트다. 그 밖의 이름은 런타임 고유의 `require`에 넘긴다. Node의 내장 모듈이 그런 예이며, 고유 `require`가 없는 런타임에서는 오류가 난다. `JavaScriptBinding.MODULE_LOADER`에 이 규칙을 구현한 로더가 있으므로 엔진은 파일을 함수로 컴파일하는 방법만 제공하면 된다.
 
 모든 JavaScript 코드는 엔진 스레드 하나에서 실행한다. 로드, 이벤트, 타이머, 비동기 응답 같은 작업이 하나 끝날 때마다 Promise 마이크로태스크를 처리한다.
