@@ -129,3 +129,10 @@ class ImplementationBuilder internal constructor(private val spec: ModuleSpec) {
         emitted += events
     }
 }
+
+/** This provider's modules by namespace. Throws when two claim the same one. */
+fun Provider.modulesByNamespace(): Map<String, ProviderModule> {
+    val duplicate = modules.groupBy { it.spec.namespace }.filterValues { it.size > 1 }.keys
+    require(duplicate.isEmpty()) { "A provider publishes $duplicate more than once" }
+    return modules.associateBy { it.spec.namespace }
+}

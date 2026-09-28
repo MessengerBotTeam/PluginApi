@@ -9,21 +9,27 @@ import com.xfl.msgbot.plugin.api.call.Args
 import com.xfl.msgbot.plugin.api.value.Value
 
 /**
- * Offers one module to scripts: functions they call and events they hear. A message source is a
- * provider of the standard `bot` module; an extension owns a namespace of its own. Providers know
- * nothing about engines or languages.
+ * Offers modules to scripts: functions they call and events they hear. A provider can publish
+ * several namespaces at once, standard ones such as `bot` (any compatible part of the standard)
+ * and its own; a project combines as many providers as it likes. Providers know nothing about
+ * engines or languages.
  *
  * ```kotlin
- * class WeatherProvider : Provider {
+ * class KakaoProvider : Provider {
  *     private var context: ProviderContext? = null
  *
- *     override val module = provide("weather") {
- *         function("forecast", returns = Type.STRING) {
- *             param("city", Type.STRING)
- *             handle { call -> "Sunny in ${call.args.string("city")}" }
- *         }
- *         event("alert") { field("text", Type.STRING) }
- *     }
+ *     override val modules = listOf(
+ *         implement(StandardApi.Bot) {
+ *             handle("send") { call -> sendIntent(call.args.stringOrNull("channelId"), call.args.string("text")) }
+ *             emits("message")
+ *         },
+ *         provide("kakao") {
+ *             function("members", returns = Type.list(Type.STRING)) {
+ *                 param("channelId", Type.STRING)
+ *                 handle { call -> membersOf(call.args.string("channelId")) }
+ *             }
+ *         },
+ *     )
  *
  *     override fun start(context: ProviderContext) { this.context = context }
  *     override fun stop() { context = null }
@@ -34,7 +40,8 @@ import com.xfl.msgbot.plugin.api.value.Value
  * its own. [ProviderContext.emit] may be called from any thread.
  */
 interface Provider : AutoCloseable {
-    val module: ProviderModule
+    /** Every namespace this provider publishes, at most one module each. */
+    val modules: List<ProviderModule>
 
     /**
      * Begins work for the projects in [ProviderContext.projects]. When their selection or options
@@ -55,9 +62,9 @@ interface ProviderContext {
     val projects: Map<String, Map<String, String>>
 
     /**
-     * Sends [event] (unqualified: `alert`, not `weather.alert`) to one project, or to every project
-     * using this provider when [projectId] is null. [payload] must match the event's schema; the
-     * host drops one that does not and says why.
+     * Sends [event], qualified (`bot.message`, `kakao.read`), to one project, or to every project
+     * using this provider when [projectId] is null. The event must be one of this provider's
+     * modules' and [payload] must match its schema; a mistake throws here, where it was made.
      */
     fun emit(
         event: String,
@@ -71,14 +78,14 @@ interface ProviderContext {
     )
 }
 
-/** [emit] with plain Kotlin values: `context.emit("alert", "text" to "Rain")`. */
+/** [emit] with plain Kotlin values: `context.emit("weather.alert", "text" to "Rain")`. */
 fun ProviderContext.emit(
     event: String,
     vararg fields: Pair<String, Any?>,
     projectId: String? = null,
 ) = emit(event, fields.associate { (key, value) -> key to Value.of(value) }, projectId)
 
-/** One call from one project. [options] are that project's settings for this provider. */
+/** One call from one project to a function of one module. [options] are that project's settings for this provider. */
 class ProviderCall(
     val projectId: String,
     val function: String,

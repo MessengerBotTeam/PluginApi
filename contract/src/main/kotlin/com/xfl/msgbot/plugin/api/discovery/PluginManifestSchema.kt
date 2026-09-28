@@ -7,7 +7,7 @@ package com.xfl.msgbot.plugin.api.discovery
 
 /**
  * How an APK tells the host what it contains, before anything is bound. One service, one
- * `<meta-data>`, one XML file listing every engine, profile, source and extension in the APK:
+ * `<meta-data>`, one XML file listing every engine, profile and provider in the APK:
  *
  * ```xml
  * <service android:name=".MyPluginService" android:exported="true"
@@ -24,15 +24,15 @@ package com.xfl.msgbot.plugin.api.discovery
  *     </engine>
  *     <profile id="api2" language="lua" label="@string/lua_api2" shim="@raw/api2" template="@raw/starter"
  *         requires="bot project log" />
- *     <source id="discord" label="@string/discord">
- *         <option key="channel" type="string" label="@string/channel" />
- *     </source>
- *     <extension id="weather" namespace="weather" label="@string/weather" />
+ *     <provider id="kakao-db" label="@string/kakao_db" provides="bot kakao">
+ *         <option key="root" type="boolean" label="@string/use_root" default="true" />
+ *     </provider>
  * </msgbot-plugin>
  * ```
  *
- * The host shows, stores and checks everything here without running plugin code. What a provider
- * can do in detail (its module spec) it says itself when bound.
+ * The host shows, stores and checks everything here without running plugin code. [ATTR_PROVIDES]
+ * is a promise: a provider that publishes a namespace it did not list is refused. The detail of
+ * each module (its functions and events) the provider says itself when bound.
  */
 object PluginManifestSchema {
     const val ACTION = "com.xfl.msgbot.plugin.PLUGIN"
@@ -45,8 +45,7 @@ object PluginManifestSchema {
     const val TAG_ENGINE = "engine"
     const val TAG_LANGUAGE = "language"
     const val TAG_PROFILE = "profile"
-    const val TAG_SOURCE = "source"
-    const val TAG_EXTENSION = "extension"
+    const val TAG_PROVIDER = "provider"
     const val TAG_OPTION = "option"
 
     /** On the root: the protocol the plugin speaks, checked before binding. */
@@ -70,14 +69,18 @@ object PluginManifestSchema {
     const val ATTR_SHIM = "shim"
     const val ATTR_TEMPLATE = "template"
 
-    /** Space-separated namespaces the profile needs, each optionally `name@minVersion`. */
+    /**
+     * Space-separated namespaces the profile needs, each optionally `name@minVersion`. A provider
+     * in the same APK that provides one of them is selected along with the profile.
+     */
     const val ATTR_REQUIRES = "requires"
 
     /** `false` keeps a profile for existing projects but out of the new-project list. */
     const val ATTR_NEW_PROJECTS = "newProjects"
 
-    // <extension>
-    const val ATTR_NAMESPACE = "namespace"
+    // <provider>
+    /** Space-separated namespaces the provider publishes: standard ones (`bot`) and its own. */
+    const val ATTR_PROVIDES = "provides"
 
     // <option>
     const val ATTR_KEY = "key"

@@ -16,11 +16,12 @@ import com.xfl.msgbot.plugin.api.rpc.RpcHandler
 import com.xfl.msgbot.plugin.api.rpc.RpcPeer
 import com.xfl.msgbot.plugin.api.schema.ModuleSpec
 import com.xfl.msgbot.plugin.api.value.Value
+import com.xfl.msgbot.plugin.api.value.asArrayOrNull
 import com.xfl.msgbot.plugin.api.value.asStringOrNull
 
 /**
  * The host side of a provider running in a plugin: a [Provider] like any builtin one, so the host
- * has a single way of running providers. Its [module] spec is what the plugin described itself as.
+ * has a single way of running providers. Its [modules] are what the plugin described itself as.
  */
 class RemoteProvider private constructor(
     transport: PluginTransport,
@@ -29,7 +30,7 @@ class RemoteProvider private constructor(
 ) : Provider {
     @Volatile private var context: ProviderContext? = null
 
-    private lateinit var spec: ModuleSpec
+    private lateinit var specs: List<ModuleSpec>
 
     private val handler =
         object : RpcHandler {
@@ -56,14 +57,16 @@ class RemoteProvider private constructor(
 
     private val peer = RpcPeer(transport, handler, onError)
 
-    override val module: ProviderModule by lazy {
-        ProviderModule(spec) { call ->
-            peer
-                .request(
-                    Wire.PROVIDER_CALL,
-                    Wire.obj("project" to call.projectId, "function" to call.function, "args" to call.args.values),
-                    timeoutMs,
-                ).getOrThrow()
+    override val modules: List<ProviderModule> by lazy {
+        specs.map { spec ->
+            ProviderModule(spec) { call ->
+                peer
+                    .request(
+                        Wire.PROVIDER_CALL,
+                        Wire.obj("project" to call.projectId, "function" to spec.qualified(call.function), "args" to call.args.values),
+                        timeoutMs,
+                    ).getOrThrow()
+            }
         }
     }
 
@@ -93,7 +96,7 @@ class RemoteProvider private constructor(
             val provider = RemoteProvider(transport, timeoutMs, onError)
             try {
                 val hello = Wire.checkHello(provider.peer.request(Wire.HELLO, Wire.hello(), Wire.HELLO_TIMEOUT_MS))
-                provider.spec = ModuleSpec.fromValue(hello["module"] ?: throw IllegalStateException("The provider did not describe its module"))
+                provider.specs = (hello["modules"]?.asArrayOrNull() ?: throw IllegalStateException("The provider did not describe its modules")).map(ModuleSpec::fromValue)
             } catch (e: Exception) {
                 provider.peer.close()
                 throw e

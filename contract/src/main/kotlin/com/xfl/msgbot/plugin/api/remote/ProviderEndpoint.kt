@@ -11,6 +11,9 @@ import com.xfl.msgbot.plugin.api.engine.EngineThread
 import com.xfl.msgbot.plugin.api.provider.Provider
 import com.xfl.msgbot.plugin.api.provider.ProviderCall
 import com.xfl.msgbot.plugin.api.provider.ProviderContext
+import com.xfl.msgbot.plugin.api.provider.ProviderModule
+import com.xfl.msgbot.plugin.api.provider.modulesByNamespace
+import com.xfl.msgbot.plugin.api.schema.Names
 import com.xfl.msgbot.plugin.api.remote.Wire.map
 import com.xfl.msgbot.plugin.api.remote.Wire.string
 import com.xfl.msgbot.plugin.api.rpc.PluginTransport
@@ -36,6 +39,9 @@ class ProviderEndpoint(
 
     @Volatile private var provider: Provider? = null
 
+    // Read once the provider exists; every request is queued behind its creation.
+    @Volatile private var modules: Map<String, ProviderModule> = emptyMap()
+
     @Volatile private var startupFailure: String? = null
 
     @Volatile private var running: Running? = null
@@ -48,9 +54,10 @@ class ProviderEndpoint(
             payload: Map<String, Value>,
             projectId: String?,
         ) {
-            val spec = requireNotNull(provider).module.spec
-            val declared = requireNotNull(spec.event(event)) { "${spec.namespace} declares no event '$event'" }
-            declared.checkPayload(payload)?.let { throw IllegalArgumentException("${spec.qualified(event)}: $it") }
+            val (namespace, name) = requireNotNull(Names.split(event)) { "'$event' is not a qualified event name (namespace.event)" }
+            val module = requireNotNull(modules[namespace]) { "This provider publishes no '$namespace' module" }
+            val declared = requireNotNull(module.spec.event(name)) { "$namespace declares no event '$name'" }
+            declared.checkPayload(payload)?.let { throw IllegalArgumentException("$event: $it") }
             if (active) peer.notify(Wire.PROVIDER_EMIT, Wire.obj("event" to event, "payload" to payload, "project" to projectId))
         }
 
@@ -68,7 +75,7 @@ class ProviderEndpoint(
                 reply: (CallResult) -> Unit,
             ) {
                 when (method) {
-                    Wire.HELLO -> onProvider(reply) { provider -> Wire.hello(provider.module.spec) }
+                    Wire.HELLO -> onProvider(reply) { Wire.hello(modules.values.map { it.spec }) }
                     Wire.PROVIDER_START -> {
                         val projects = Wire.projectsOf(params.map()["projects"])
                         onProvider(reply) { provider ->
@@ -85,15 +92,17 @@ class ProviderEndpoint(
                             Value.VNull
                         }
                     Wire.PROVIDER_CALL -> {
-                        val call =
+                        val (module, call) =
                             try {
                                 val map = params.map()
                                 val project = map.string("project")
-                                ProviderCall(project, map.string("function"), Args(map.getValue("args").map()), running?.projects?.get(project).orEmpty())
+                                val (namespace, name) = Names.split(map.string("function")) ?: throw IllegalArgumentException("unqualified function")
+                                val module = modules[namespace] ?: return reply(CallResult.unknownFunction(map.string("function")))
+                                module to ProviderCall(project, name, Args(map.getValue("args").map()), running?.projects?.get(project).orEmpty())
                             } catch (e: Exception) {
                                 return reply(CallResult.badArgs("Malformed call: ${e.message}"))
                             }
-                        onProvider(reply) { provider -> provider.module.call(call) }
+                        onProvider(reply) { module.call(call) }
                     }
                     else -> reply(CallResult.failed("A provider does not answer '$method'"))
                 }
@@ -113,7 +122,7 @@ class ProviderEndpoint(
         thread.execute {
             constructed.await()
             try {
-                provider = factory()
+                provider = factory().also { modules = it.modulesByNamespace() }
             } catch (e: Exception) {
                 startupFailure = "The provider could not start: ${e.message ?: e.javaClass.simpleName}"
                 reportError(startupFailure!!)

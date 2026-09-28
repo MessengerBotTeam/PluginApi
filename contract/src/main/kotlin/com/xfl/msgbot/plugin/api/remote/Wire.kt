@@ -49,7 +49,7 @@ internal object Wire {
 
     fun obj(vararg fields: Pair<String, Any?>): Value.VObject = Value.VObject(fields.associate { (k, v) -> k to Value.of(v) })
 
-    fun hello(module: ModuleSpec? = null): Value = obj("protocol" to ProtocolVersion.CURRENT, "module" to module?.toValue())
+    fun hello(modules: List<ModuleSpec> = emptyList()): Value = obj("protocol" to ProtocolVersion.CURRENT, "modules" to modules.map { it.toValue() })
 
     /** The protocol a hello answer names; refuses one this side cannot speak. */
     fun checkHello(answer: CallResult): Map<String, Value> {
