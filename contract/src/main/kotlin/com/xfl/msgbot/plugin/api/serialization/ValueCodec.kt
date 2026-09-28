@@ -5,23 +5,54 @@
 
 package com.xfl.msgbot.plugin.api.serialization
 
-import com.xfl.msgbot.plugin.api.value.Blob
 import com.xfl.msgbot.plugin.api.value.Value
-import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
-import java.io.DataInputStream
 import java.io.DataOutputStream
+import java.nio.BufferUnderflowException
+import java.nio.ByteBuffer
 
 /**
- * Dependency-free tagged binary codec for the [Value] model, used to move values across a
- * process boundary (Phase 2 IPC). Both endpoints being JVM, a compact custom format is enough;
- * swap for standard CBOR when non-JVM plugins arrive.
- *
- * Blob bytes are serialized only when [Blob.Transport.Inline]. A [Blob.Transport.Shm] is written as
- * its descriptor, since the region itself is handed over out-of-band; a [BlobHook] is what turns
- * one into the other. Pipe/FileRef still degrade to a bare reference.
+ * Where large byte payloads travel instead of the frame. A transport that can hand memory across
+ * (shared memory over Binder) takes them out in [offload] and gives them back in [resolve]; the
+ * frame keeps only an ID and a length.
+ */
+interface BytesChannel {
+    /** An ID when [bytes] now travel out of band; null keeps them in the frame. */
+    fun offload(bytes: ByteArray): Long?
+
+    /** The bytes sent out of band under [transferId]. Throws when they never arrived. */
+    fun resolve(
+        transferId: Long,
+        length: Int,
+    ): ByteArray
+
+    companion object {
+        /** Everything stays in the frame; what an in-process transport wants. */
+        val INLINE: BytesChannel =
+            object : BytesChannel {
+                override fun offload(bytes: ByteArray): Long? = null
+
+                override fun resolve(
+                    transferId: Long,
+                    length: Int,
+                ): ByteArray = throw MalformedFrameException("Out-of-band bytes on a transport that has none")
+            }
+    }
+}
+
+class MalformedFrameException(message: String) : IllegalArgumentException(message)
+
+/**
+ * The tagged binary form of [Value]. A frame comes from another app, so decoding trusts nothing:
+ * every length is checked against what is actually left, and nesting is bounded, so a broken or
+ * hostile plugin gets a [MalformedFrameException] instead of the host's memory or stack.
  */
 object ValueCodec {
+    const val MAX_DEPTH = 64
+
+    /** The most one out-of-band payload may claim. */
+    const val MAX_SHARED_BYTES = 64 * 1024 * 1024
+
     private const val T_NULL = 0
     private const val T_FALSE = 1
     private const val T_TRUE = 2
@@ -31,36 +62,41 @@ object ValueCodec {
     private const val T_BYTES = 6
     private const val T_ARRAY = 7
     private const val T_OBJECT = 8
-    private const val T_HANDLE = 9
-    private const val T_BLOB = 10
+    private const val T_SHARED_BYTES = 9
 
-    private const val TRANSPORT_INLINE = 0
-    private const val TRANSPORT_REF = 1
-    private const val TRANSPORT_SHM = 2
-
-    /**
-     * Rewrites a blob on its way through the codec, letting a transport move big payloads
-     * out-of-band ([Blob.Transport.Inline] -> [Blob.Transport.Shm] on the way out, and back on the
-     * way in). Defaults to identity, which keeps everything inline.
-     */
-    fun interface BlobHook {
-        fun apply(blob: Blob): Blob
-    }
-
-    private val identity = BlobHook { it }
-
-    fun encode(value: Value, onBlob: BlobHook = identity): ByteArray {
+    fun encode(
+        value: Value,
+        bytes: BytesChannel = BytesChannel.INLINE,
+    ): ByteArray {
         val out = ByteArrayOutputStream()
-        DataOutputStream(out).use { write(it, value, onBlob) }
+        DataOutputStream(out).use { write(it, value, bytes, 0) }
         return out.toByteArray()
     }
 
-    fun decode(bytes: ByteArray, onBlob: BlobHook = identity): Value =
-        DataInputStream(ByteArrayInputStream(bytes)).use { read(it, onBlob) }
+    fun decode(
+        frame: ByteArray,
+        bytes: BytesChannel = BytesChannel.INLINE,
+    ): Value {
+        val buffer = ByteBuffer.wrap(frame)
+        val value =
+            try {
+                read(buffer, bytes, 0)
+            } catch (_: BufferUnderflowException) {
+                throw MalformedFrameException("Frame ended early")
+            }
+        if (buffer.hasRemaining()) throw MalformedFrameException("${buffer.remaining()} bytes left after the value")
+        return value
+    }
 
-    private fun write(out: DataOutputStream, value: Value, onBlob: BlobHook) {
+    private fun write(
+        out: DataOutputStream,
+        value: Value,
+        channel: BytesChannel,
+        depth: Int,
+    ) {
+        require(depth <= MAX_DEPTH) { "Values nest deeper than $MAX_DEPTH" }
         when (value) {
-            is Value.VNull -> out.writeByte(T_NULL)
+            Value.VNull -> out.writeByte(T_NULL)
             is Value.VBool -> out.writeByte(if (value.value) T_TRUE else T_FALSE)
             is Value.VInt -> {
                 out.writeByte(T_INT)
@@ -72,99 +108,90 @@ object ValueCodec {
             }
             is Value.VString -> {
                 out.writeByte(T_STRING)
-                writeString(out, value.value)
+                writeBytes(out, value.value.toByteArray(Charsets.UTF_8))
             }
             is Value.VBytes -> {
-                out.writeByte(T_BYTES)
-                writeBytes(out, value.value)
+                val transfer = channel.offload(value.value)
+                if (transfer != null) {
+                    out.writeByte(T_SHARED_BYTES)
+                    out.writeLong(transfer)
+                    out.writeInt(value.value.size)
+                } else {
+                    out.writeByte(T_BYTES)
+                    writeBytes(out, value.value)
+                }
             }
             is Value.VArray -> {
                 out.writeByte(T_ARRAY)
                 out.writeInt(value.items.size)
-                value.items.forEach { write(out, it, onBlob) }
+                value.items.forEach { write(out, it, channel, depth + 1) }
             }
             is Value.VObject -> {
                 out.writeByte(T_OBJECT)
                 out.writeInt(value.entries.size)
-                value.entries.forEach { (k, v) ->
-                    writeString(out, k)
-                    write(out, v, onBlob)
+                value.entries.forEach { (key, item) ->
+                    writeBytes(out, key.toByteArray(Charsets.UTF_8))
+                    write(out, item, channel, depth + 1)
                 }
-            }
-            is Value.VHandle -> {
-                out.writeByte(T_HANDLE)
-                out.writeLong(value.id)
-            }
-            is Value.VBlob -> {
-                out.writeByte(T_BLOB)
-                writeBlob(out, onBlob.apply(value.blob))
             }
         }
     }
 
-    private fun read(input: DataInputStream, onBlob: BlobHook): Value =
-        when (val tag = input.readByte().toInt()) {
+    private fun read(
+        buffer: ByteBuffer,
+        channel: BytesChannel,
+        depth: Int,
+    ): Value {
+        if (depth > MAX_DEPTH) throw MalformedFrameException("Values nest deeper than $MAX_DEPTH")
+        return when (val tag = buffer.get().toInt()) {
             T_NULL -> Value.VNull
             T_FALSE -> Value.VBool(false)
             T_TRUE -> Value.VBool(true)
-            T_INT -> Value.VInt(input.readLong())
-            T_DOUBLE -> Value.VDouble(input.readDouble())
-            T_STRING -> Value.VString(readString(input))
-            T_BYTES -> Value.VBytes(readBytes(input))
-            T_ARRAY -> Value.VArray((0 until input.readInt()).map { read(input, onBlob) })
+            T_INT -> Value.VInt(buffer.long)
+            T_DOUBLE -> Value.VDouble(buffer.double)
+            T_STRING -> Value.VString(String(readBytes(buffer), Charsets.UTF_8))
+            T_BYTES -> Value.VBytes(readBytes(buffer))
+            T_SHARED_BYTES -> {
+                val transfer = buffer.long
+                val length = buffer.int
+                if (length !in 0..MAX_SHARED_BYTES) throw MalformedFrameException("Shared payload of $length bytes")
+                Value.VBytes(channel.resolve(transfer, length))
+            }
+            T_ARRAY -> {
+                // Every item takes at least its tag byte, so a count beyond that is a lie.
+                val count = count(buffer, perItem = 1)
+                Value.VArray(List(count) { read(buffer, channel, depth + 1) })
+            }
             T_OBJECT -> {
-                val n = input.readInt()
-                val entries = LinkedHashMap<String, Value>(n)
-                repeat(n) { entries[readString(input)] = read(input, onBlob) }
+                val count = count(buffer, perItem = 5)
+                val entries = LinkedHashMap<String, Value>(count)
+                repeat(count) { entries[String(readBytes(buffer), Charsets.UTF_8)] = read(buffer, channel, depth + 1) }
                 Value.VObject(entries)
             }
-            T_HANDLE -> Value.VHandle(input.readLong())
-            T_BLOB -> Value.VBlob(onBlob.apply(readBlob(input)))
-            else -> error("Unknown Value tag: $tag")
-        }
-
-    private fun writeBlob(out: DataOutputStream, blob: Blob) {
-        out.writeLong(blob.id)
-        out.writeLong(blob.size)
-        writeString(out, blob.mime)
-        when (val t = blob.transport) {
-            is Blob.Transport.Inline -> {
-                out.writeByte(TRANSPORT_INLINE)
-                writeBytes(out, t.bytes)
-            }
-            is Blob.Transport.Shm -> {
-                out.writeByte(TRANSPORT_SHM)
-                out.writeLong(t.id)
-                out.writeLong(t.offset)
-                out.writeLong(t.length)
-            }
-            else -> out.writeByte(TRANSPORT_REF)
+            else -> throw MalformedFrameException("Unknown value tag $tag")
         }
     }
 
-    private fun readBlob(input: DataInputStream): Blob {
-        val id = input.readLong()
-        val size = input.readLong()
-        val mime = readString(input)
-        return when (input.readByte().toInt()) {
-            TRANSPORT_INLINE -> Blob(id, size, mime, Blob.Transport.Inline(readBytes(input)))
-            TRANSPORT_SHM -> Blob(id, size, mime, Blob.Transport.Shm(input.readLong(), input.readLong(), input.readLong()))
-            else -> Blob(id, size, mime, Blob.Transport.FileRef(id))
-        }
+    private fun count(
+        buffer: ByteBuffer,
+        perItem: Int,
+    ): Int {
+        val count = buffer.int
+        if (count < 0 || count > buffer.remaining() / perItem) throw MalformedFrameException("Collection of $count items in ${buffer.remaining()} bytes")
+        return count
     }
 
-    private fun writeString(out: DataOutputStream, s: String) = writeBytes(out, s.toByteArray(Charsets.UTF_8))
-    private fun readString(input: DataInputStream): String = String(readBytes(input), Charsets.UTF_8)
-
-    private fun writeBytes(out: DataOutputStream, bytes: ByteArray) {
+    private fun writeBytes(
+        out: DataOutputStream,
+        bytes: ByteArray,
+    ) {
         out.writeInt(bytes.size)
         out.write(bytes)
     }
 
-    private fun readBytes(input: DataInputStream): ByteArray {
-        val len = input.readInt()
-        val bytes = ByteArray(len)
-        input.readFully(bytes)
-        return bytes
+    private fun readBytes(buffer: ByteBuffer): ByteArray {
+        val length = buffer.int
+        if (length < 0 || length > buffer.remaining()) throw MalformedFrameException("Field of $length bytes in ${buffer.remaining()}")
+        return ByteArray(length).also(buffer::get)
     }
 }

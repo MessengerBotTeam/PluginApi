@@ -5,5 +5,5 @@ plugins {
 
 allprojects {
     group = "com.xfl.msgbot.plugin.api"
-    version = "2.0.0-SNAPSHOT"
+    version = "3.0.0-SNAPSHOT"
 }
