@@ -143,7 +143,7 @@ class RpcPeer(
         if (closed.get()) return
         val frame =
             try {
-                ValueCodec.decode(bytes, transport.bytes).asObjectOrNull() ?: throw MalformedFrameException("A frame is a map")
+                open(bytes)
             } catch (e: Exception) {
                 onProtocolError("Dropped a malformed frame: ${e.message}")
                 return
@@ -185,16 +185,43 @@ class RpcPeer(
         }
     }
 
+    /**
+     * A frame can outgrow a transaction even when no single value in it does, such as a project's
+     * many source files. Past [INLINE_FRAME_BYTES] it travels out of band the way large bytes do,
+     * and only a pointer to it goes inline.
+     */
     private inline fun send(
         frame: Value,
         onFailure: (String) -> Unit,
     ) {
         try {
-            transport.send(ValueCodec.encode(frame, transport.bytes))
+            val encoded = ValueCodec.encode(frame, transport.bytes)
+            val outOfBand = if (encoded.size > INLINE_FRAME_BYTES) transport.bytes.offload(encoded) else null
+            transport.send(
+                if (outOfBand == null) {
+                    encoded
+                } else {
+                    ValueCodec.encode(frame(SHARED, ID to Value.VInt(outOfBand), LENGTH to Value.VInt(encoded.size.toLong())))
+                },
+            )
         } catch (e: Exception) {
             onFailure(e.message ?: e.javaClass.simpleName)
         }
     }
+
+    private fun open(bytes: ByteArray): Map<String, Value> {
+        val frame = decode(bytes)
+        if (frame[KIND]?.asLongOrNull() != SHARED) return frame
+        val id = frame[ID]?.asLongOrNull()
+        val length = frame[LENGTH]?.asLongOrNull()
+        if (id == null || length == null || length !in 0..ValueCodec.MAX_SHARED_BYTES) throw MalformedFrameException("A shared frame without a valid id or length")
+        val inner = decode(transport.bytes.resolve(id, length.toInt()))
+        if (inner[KIND]?.asLongOrNull() == SHARED) throw MalformedFrameException("A shared frame inside a shared frame")
+        return inner
+    }
+
+    private fun decode(bytes: ByteArray): Map<String, Value> =
+        ValueCodec.decode(bytes, transport.bytes).asObjectOrNull() ?: throw MalformedFrameException("A frame is a map")
 
     private companion object {
         const val KIND = "t"
@@ -204,10 +231,16 @@ class RpcPeer(
         const val VALUE = "v"
         const val ERROR_CODE = "e"
         const val ERROR_MESSAGE = "x"
+        const val LENGTH = "l"
 
         const val REQUEST = 1L
         const val RESPONSE = 2L
         const val NOTIFY = 3L
+
+        /** A frame that was sent out of band; [ID] names the transfer, [LENGTH] its size. */
+        const val SHARED = 4L
+
+        const val INLINE_FRAME_BYTES = 64 * 1024
 
         val TIMER =
             ScheduledThreadPoolExecutor(1) { r -> Thread(r, "plugin-rpc-timeouts").apply { isDaemon = true } }
