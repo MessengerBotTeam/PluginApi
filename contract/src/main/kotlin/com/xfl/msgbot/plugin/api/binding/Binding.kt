@@ -6,8 +6,10 @@
 package com.xfl.msgbot.plugin.api.binding
 
 /**
- * The names every language binding defines in the script's global scope. What each looks like in
- * a given language is that language's binding spec (docs/bindings); these are the same everywhere.
+ * The names a language binding defines in the script's global scope. The host never looks for
+ * them: only an engine and the profiles written for its language see them. They are a convention
+ * so that every binding reads alike; a plugin that adds a language keeps them and decides the
+ * rest itself (docs/bindings/README.md).
  */
 object Binding {
     /** The project's modules, as data: a list of `ModuleSpec.toValue()`. Bound before the profile runs. */
@@ -23,7 +25,11 @@ object Binding {
     const val DISPATCH = "__dispatch"
 }
 
-/** What the JavaScript binding shares between engines. */
+/**
+ * The JavaScript binding, part of the contract because the app runs JavaScript itself: every
+ * JavaScript engine, the built-in one or a plugin, must run the same profiles, the app's API2 and
+ * Legacy and any a plugin ships. Spec: docs/bindings/javascript.md.
+ */
 object JavaScriptBinding {
     /** The profile kit's module name: `require('msgbot')`. */
     const val KIT = "msgbot"
@@ -67,17 +73,4 @@ object JavaScriptBinding {
             }
             append('"')
         }
-}
-
-/** What the Lua binding shares between engines. */
-object LuaBinding {
-    /** The profile kit's module name: `require("msgbot")`. */
-    const val KIT_NAME = "msgbot"
-
-    /** The kit's source, a Lua chunk returning the kit. Engines serve it as `require("msgbot")`. */
-    val KIT: String by lazy {
-        checkNotNull(LuaBinding::class.java.getResourceAsStream("lua/kit.lua")) { "kit.lua is missing from the PluginApi jar" }
-            .bufferedReader(Charsets.UTF_8)
-            .use { it.readText() }
-    }
 }
