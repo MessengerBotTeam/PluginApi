@@ -9,7 +9,7 @@ import com.xfl.msgbot.plugin.api.value.Value
 
 /**
  * The type of a parameter, a return value or an event field. Written and read as a short text
- * form so a schema is as legible in a shim or a generated `.d.ts` as it is here:
+ * form so a schema is as legible in a shim or an error message as it is here:
  *
  * ```
  * string   int?   list<string>   map<int>   {status: int, body: string?}
@@ -175,6 +175,64 @@ class Field(
 }
 
 fun Type.nullable(): Type = if (this is Type.Nullable) this else Type.Nullable(this)
+
+/**
+ * Whether this type, as a provider built against another edition of a standard declares it, can
+ * stand for [standard]'s. The same type, except that a struct may lack optional fields the
+ * standard added later, or carry optional ones this edition does not know yet.
+ */
+internal fun Type.fits(standard: Type): Boolean =
+    when {
+        this == standard -> true
+        this is Type.Nullable && standard is Type.Nullable -> inner.fits(standard.inner)
+        this is Type.ListOf && standard is Type.ListOf -> item.fits(standard.item)
+        this is Type.MapOf && standard is Type.MapOf -> value.fits(standard.value)
+        this is Type.Struct && standard is Type.Struct -> fieldsProblem("", "field", fields, standard.fields) == null
+        else -> false
+    }
+
+/**
+ * Why [declared] cannot stand for [standard] as the fields of [member], or null when it can: shared
+ * fields fit, and a field only one side has is optional there.
+ */
+internal fun fieldsProblem(
+    member: String,
+    kind: String,
+    declared: List<Field>,
+    standard: List<Field>,
+): String? {
+    fun at(name: String) = if (member.isEmpty()) name else "$member's $kind '$name'"
+    val byName = standard.associateBy { it.name }
+    for (field in declared) {
+        val expected = byName[field.name]
+        when {
+            expected == null && !field.optional -> return "${at(field.name)} is required, and this edition of the standard has no such $kind"
+            expected != null && !field.type.fits(expected.type) -> return "${at(field.name)} is ${field.type}, not ${expected.type}"
+        }
+    }
+    val names = declared.map { it.name }.toSet()
+    standard.firstOrNull { !it.optional && it.name !in names }?.let { return "$member leaves out the required $kind '${it.name}'" }
+    return null
+}
+
+/** [value] without the struct fields this type does not name, at any depth: a newer edition's additions. */
+fun Type.conform(value: Value): Value =
+    when {
+        value is Value.VNull -> value
+        this is Type.Nullable -> inner.conform(value)
+        this is Type.ListOf && value is Value.VArray -> Value.VArray(value.items.map(item::conform))
+        this is Type.MapOf && value is Value.VObject -> Value.VObject(value.entries.mapValues { (_, v) -> this.value.conform(v) })
+        this is Type.Struct && value is Value.VObject -> Value.VObject(conformFields(fields, value.entries))
+        else -> value
+    }
+
+internal fun conformFields(
+    fields: List<Field>,
+    entries: Map<String, Value>,
+): Map<String, Value> {
+    val known = fields.associateBy { it.name }
+    return entries.filterKeys { it in known }.mapValues { (name, v) -> known.getValue(name).type.conform(v) }
+}
 
 private class TypeParser(private val text: String) {
     private var pos = 0

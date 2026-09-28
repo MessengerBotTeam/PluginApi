@@ -16,12 +16,12 @@ import com.xfl.msgbot.plugin.api.schema.struct
  * their facades on these.
  *
  * - [Project], [Log], [File], [Db], [Http], [Device], [Sys]: answered by the host, and only by it.
- * - [Bot]: a standard. Providers implement compatible parts of it ([ModuleSpec.accepts]); a
- *   project may combine several, one per member.
+ * - [Bot]: a standard. Providers implement parts of it, fitted to the host's edition
+ *   ([ModuleSpec.fit]); a project may combine several, one per member.
  *
  * Standards evolve by addition: a new function, event, optional parameter or optional field keeps
- * the version, so providers built against an older one stay accepted. Only an incompatible change
- * raises it.
+ * the version, so a provider built against an older or a newer edition than the host's still
+ * works with it. Only an incompatible change raises the version.
  */
 object StandardApi {
     val Project: ModuleSpec =
@@ -107,31 +107,37 @@ object StandardApi {
     /**
      * Messaging, messenger-agnostic. Any number of providers may implement parts of it (a
      * notification reader, a database reader, an Intent sender); a project composes them.
-     * Addresses are optional so each provider can take the one it understands: a reply token it
-     * issued, a room name, or a channel ID.
+     *
+     * A message requires only what every messenger has. Whatever addresses a room or a message is
+     * optional and is passed whole, so each provider takes what it understands: a token it issued
+     * itself, a room name or a channel ID. That is also what lets one provider answer messages
+     * another one received.
      */
     val Bot: ModuleSpec =
         moduleSpec("bot") {
             doc = "The messenger a project talks through, as far as its providers support it."
-            function("reply", returns = Type.BOOL, doc = "Answer the message that carried this reply token.") {
-                param("token", Type.STRING)
+            function("reply", returns = Type.BOOL, doc = "Answer a message. Pass its token and its address; the provider uses what it understands.") {
                 param("text", Type.STRING)
-            }
-            function("markRead", returns = Type.BOOL, doc = "Mark the message that carried this read token as read.") {
-                param("token", Type.STRING)
+                optional("token", Type.STRING, doc = "The message's replyToken, meaningful to the provider that issued it")
+                optional("room", Type.STRING)
+                optional("channelId", Type.STRING)
+                optional("packageName", Type.STRING)
+                optional("extra", Type.map(Type.ANY), doc = "What only the answering provider understands, as it documents it")
             }
             function("send", returns = Type.BOOL, doc = "Send to a room, found by whichever address the provider understands.") {
                 param("text", Type.STRING)
                 optional("room", Type.STRING)
                 optional("channelId", Type.STRING)
                 optional("packageName", Type.STRING)
+                optional("extra", Type.map(Type.ANY), doc = "What only the sending provider understands, as it documents it")
             }
             function("canReply", returns = Type.BOOL) {
                 optional("room", Type.STRING)
                 optional("channelId", Type.STRING)
                 optional("packageName", Type.STRING)
             }
-            function("markRoomRead", returns = Type.BOOL) {
+            function("markRead", returns = Type.BOOL, doc = "Mark a message, or its room up to now, as read.") {
+                optional("token", Type.STRING, doc = "The message's readToken, meaningful to the provider that issued it")
                 optional("room", Type.STRING)
                 optional("channelId", Type.STRING)
                 optional("packageName", Type.STRING)
@@ -143,21 +149,21 @@ object StandardApi {
             event("message") {
                 field("room", Type.STRING)
                 field("content", Type.STRING)
-                field("channelId", Type.STRING, doc = "IDs are strings so no language rounds them.")
-                field("logId", Type.STRING)
-                field("isGroupChat", Type.BOOL)
                 field(
                     "author",
                     Type.struct {
                         field("name", Type.STRING)
-                        field("hash", Type.STRING)
+                        optional("hash", Type.STRING, doc = "A stable ID of the author, where the messenger has one")
                         optional("avatar", Type.STRING, doc = "An image token")
                     },
                 )
+                optional("channelId", Type.STRING, doc = "IDs are strings so no language rounds them.")
+                optional("logId", Type.STRING)
+                optional("isGroupChat", Type.BOOL)
                 optional("packageName", Type.STRING)
                 optional("isMention", Type.BOOL)
                 optional("isMultiChat", Type.BOOL)
-                optional("isDebugRoom", Type.BOOL)
+                optional("isDebugRoom", Type.BOOL, doc = "Set by the host for the debug room; providers leave it out")
                 optional("image", Type.STRING, doc = "An image token")
                 optional("replyToken", Type.STRING, doc = "Absent when this message cannot be answered by token")
                 optional("readToken", Type.STRING)

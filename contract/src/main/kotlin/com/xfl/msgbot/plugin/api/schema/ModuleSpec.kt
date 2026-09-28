@@ -53,6 +53,9 @@ data class FunctionSpec(
     fun checkArgs(args: Map<String, Value>): String? = Type.checkFields(params, args, "")
 
     fun checkResult(value: Value): String? = returns.check(value, "result")
+
+    /** [value] trimmed to [returns]: what a provider built against a newer standard added is dropped. */
+    fun conformResult(value: Value): Value = returns.conform(value)
 }
 
 /** Something a script can listen for. The payload is always a struct of [fields]. */
@@ -68,12 +71,15 @@ data class EventSpec(
     }
 
     fun checkPayload(payload: Map<String, Value>): String? = Type.checkFields(fields, payload, "")
+
+    /** [payload] trimmed to [fields]: what a provider built against a newer standard added is dropped. */
+    fun conform(payload: Map<String, Value>): Map<String, Value> = conformFields(fields, payload)
 }
 
 /**
  * The published face of one namespace: every function and event in it, with types. This is the
- * API standard. The host checks calls and events against it, engines hand it to profiles as data,
- * and tools generate typings from it, so no language has to re-read a comment to learn a signature.
+ * API standard. The host checks calls and events against it and engines hand it to profiles as
+ * data, so no language has to re-read a comment to learn a signature.
  *
  * [version] rises when a signature changes incompatibly; adding a function or an optional
  * parameter does not need it.
@@ -116,45 +122,39 @@ data class ModuleSpec(
     }
 
     /**
-     * Why [part] is not a compatible implementation of part of this standard, or null when it is.
+     * [part], a provider's implementation of part of this standard, in this edition's terms.
      *
-     * Compatible means: the same version; every function it declares exists here, answers the same
-     * type and takes a subset of these parameters with the same types, every required one
-     * included; every event it declares exists here and carries a subset of these fields on the
-     * same terms. So a provider built before an optional parameter or field was added stays
-     * compatible, and what it leaves out is simply absent from the script's `__api`.
+     * The provider may have been built against an older or a newer edition than the host's. What
+     * this edition does not know (a function, an event, an optional parameter or field added
+     * later) is left out and listed in [Fit.Accepted.ignored]; what the provider leaves out of this
+     * edition is simply absent from the script's `__api`. It is refused only when it cannot work
+     * with this edition: another version, a changed type, or a required parameter or field that
+     * one side lacks.
      */
-    fun incompatibility(part: ModuleSpec): String? {
-        if (part.namespace != namespace) return "it implements '${part.namespace}', not '$namespace'"
-        if (part.version != version) return "it implements $namespace v${part.version}, the standard is v$version"
-        for (declared in part.functions) {
-            val standard = function(declared.name) ?: return "$namespace has no function '${declared.name}'"
-            if (declared.returns != standard.returns) return "${qualified(declared.name)} answers ${declared.returns}, not ${standard.returns}"
-            subsetProblem(qualified(declared.name), "parameter", declared.params, standard.params)?.let { return it }
-        }
-        for (declared in part.events) {
-            val standard = event(declared.name) ?: return "$namespace has no event '${declared.name}'"
-            subsetProblem(qualified(declared.name), "field", declared.fields, standard.fields)?.let { return it }
-        }
-        return null
-    }
-
-    fun accepts(part: ModuleSpec): Boolean = incompatibility(part) == null
-
-    private fun subsetProblem(
-        member: String,
-        kind: String,
-        declared: List<Field>,
-        standard: List<Field>,
-    ): String? {
-        val byName = standard.associateBy { it.name }
-        for (field in declared) {
-            val expected = byName[field.name] ?: return "$member has no $kind '${field.name}'"
-            if (field.type != expected.type) return "$member's $kind '${field.name}' is ${field.type}, not ${expected.type}"
-        }
-        val names = declared.map { it.name }.toSet()
-        standard.firstOrNull { !it.optional && it.name !in names }?.let { return "$member leaves out the required $kind '${it.name}'" }
-        return null
+    fun fit(part: ModuleSpec): Fit {
+        if (part.namespace != namespace) return Fit.Refused("it implements '${part.namespace}', not '$namespace'")
+        if (part.version != version) return Fit.Refused("it implements $namespace v${part.version}, the standard is v$version")
+        val ignored = mutableListOf<String>()
+        val functions =
+            part.functions.mapNotNull { declared ->
+                val member = qualified(declared.name)
+                val standard = function(declared.name) ?: return@mapNotNull null.also { ignored += member }
+                if (!declared.returns.fits(standard.returns)) return Fit.Refused("$member answers ${declared.returns}, not ${standard.returns}")
+                fieldsProblem(member, "parameter", declared.params, standard.params)?.let { return Fit.Refused(it) }
+                val names = declared.params.map { it.name }.toSet()
+                names.filter { standard.params.none { p -> p.name == it } }.forEach { ignored += "$member($it)" }
+                standard.copy(params = standard.params.filter { it.name in names })
+            }
+        val events =
+            part.events.mapNotNull { declared ->
+                val member = qualified(declared.name)
+                val standard = event(declared.name) ?: return@mapNotNull null.also { ignored += member }
+                fieldsProblem(member, "field", declared.fields, standard.fields)?.let { return Fit.Refused(it) }
+                val names = declared.fields.map { it.name }.toSet()
+                names.filter { standard.fields.none { f -> f.name == it } }.forEach { ignored += "$member.$it" }
+                standard.copy(fields = standard.fields.filter { it.name in names })
+            }
+        return Fit.Accepted(copy(functions = functions, events = events), ignored)
     }
 
     fun toValue(): Value.VObject =
@@ -225,4 +225,12 @@ data class ModuleSpec(
 
         private fun Map<String, Value>.list(key: String): List<Value> = this[key]?.asArrayOrNull() ?: emptyList()
     }
+}
+
+/** What a host makes of a provider's implementation of part of a standard ([ModuleSpec.fit]). */
+sealed interface Fit {
+    /** [spec] is the part in the host's terms; [ignored] names what the provider offers beyond them. */
+    data class Accepted(val spec: ModuleSpec, val ignored: List<String>) : Fit
+
+    data class Refused(val reason: String) : Fit
 }

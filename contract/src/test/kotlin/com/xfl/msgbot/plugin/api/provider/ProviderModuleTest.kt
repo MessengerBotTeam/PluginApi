@@ -3,12 +3,14 @@ package com.xfl.msgbot.plugin.api.provider
 import com.xfl.msgbot.plugin.api.call.Args
 import com.xfl.msgbot.plugin.api.call.CallException
 import com.xfl.msgbot.plugin.api.call.ErrorCode
+import com.xfl.msgbot.plugin.api.schema.Fit
 import com.xfl.msgbot.plugin.api.schema.Type
 import com.xfl.msgbot.plugin.api.standard.StandardApi
 import com.xfl.msgbot.plugin.api.value.Value
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class ProviderModuleTest {
@@ -41,7 +43,7 @@ class ProviderModuleTest {
             }
         assertEquals(listOf("reply"), module.spec.functions.map { it.name })
         assertEquals(listOf("message"), module.spec.events.map { it.name })
-        assertTrue(StandardApi.Bot.accepts(module.spec))
+        assertIs<Fit.Accepted>(StandardApi.Bot.fit(module.spec))
         val e = assertFailsWith<CallException> { module.call(ProviderCall("p", "send", Args.NONE)) }
         assertEquals(ErrorCode.UNKNOWN_FUNCTION, e.code)
         assertFailsWith<IllegalArgumentException> { implement(StandardApi.Bot) { handle("teleport") { } } }

@@ -2,10 +2,11 @@ package com.xfl.msgbot.plugin.api.schema
 
 import com.xfl.msgbot.plugin.api.standard.StandardApi
 import com.xfl.msgbot.plugin.api.value.Value
+import com.xfl.msgbot.plugin.api.value.vObject
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
-import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -57,22 +58,29 @@ class ModuleSpecTest {
     }
 
     @Test
-    fun `a partial implementation of a standard is accepted, a changed signature is not`() {
+    fun `a partial implementation of a standard fits, a changed signature does not`() {
         val part = StandardApi.Bot.restrictTo(listOf("reply"), listOf("message"))
         assertEquals(listOf("reply"), part.functions.map { it.name })
-        assertNull(StandardApi.Bot.incompatibility(part))
+        assertEquals(Fit.Accepted(part, emptyList()), StandardApi.Bot.fit(part))
 
-        val forged = moduleSpec("bot") { function("reply", returns = Type.BOOL) { param("text", Type.STRING) } }
-        assertEquals("bot.reply leaves out the required parameter 'token'", StandardApi.Bot.incompatibility(forged))
-        val retyped = moduleSpec("bot") { function("reply", returns = Type.STRING) { param("token", Type.STRING); param("text", Type.STRING) } }
-        assertTrue(StandardApi.Bot.incompatibility(retyped)!!.contains("answers string"))
-        val invented = moduleSpec("bot") { function("teleport") }
-        assertTrue(StandardApi.Bot.incompatibility(invented)!!.contains("no function 'teleport'"))
+        val forged = moduleSpec("bot") { function("image", returns = Type.BYTES.nullable()) }
+        assertEquals(Fit.Refused("bot.image leaves out the required parameter 'token'"), StandardApi.Bot.fit(forged))
+        val retyped = moduleSpec("bot") { function("reply", returns = Type.STRING) { param("text", Type.STRING) } }
+        assertTrue((StandardApi.Bot.fit(retyped) as Fit.Refused).reason.contains("answers string"))
+        // The host may leave room out, so a provider cannot insist on it.
+        val demanding =
+            moduleSpec("bot") {
+                function("send", returns = Type.BOOL) {
+                    param("text", Type.STRING)
+                    param("room", Type.STRING)
+                }
+            }
+        assertIs<Fit.Refused>(StandardApi.Bot.fit(demanding))
     }
 
     @Test
-    fun `a provider built before an optional addition stays accepted`() {
-        // Written before bot.send learned channelId and packageName, and before message had extra.
+    fun `a provider built against an older edition fits`() {
+        // Written before send learned channelId, packageName and extra, and before message had extra.
         val older =
             moduleSpec("bot") {
                 function("send", returns = Type.BOOL) {
@@ -83,7 +91,62 @@ class ModuleSpecTest {
                     StandardApi.Bot.event("message")!!.fields.filter { it.name != "extra" }.forEach { field(it.name, it.type) }
                 }
             }
-        assertTrue(StandardApi.Bot.accepts(older))
-        assertFalse(StandardApi.Bot.accepts(older.copy(version = 2)))
+        val fit = assertIs<Fit.Accepted>(StandardApi.Bot.fit(older))
+        assertEquals(emptyList(), fit.ignored)
+        assertEquals(listOf("text", "room"), fit.spec.function("send")!!.params.map { it.name })
+        assertIs<Fit.Refused>(StandardApi.Bot.fit(older.copy(version = 2)))
+    }
+
+    @Test
+    fun `a provider built against a newer edition fits, without what this one does not know`() {
+        val newer =
+            moduleSpec("bot") {
+                function("send", returns = Type.BOOL) {
+                    param("text", Type.STRING)
+                    optional("room", Type.STRING)
+                    optional("silent", Type.BOOL)
+                }
+                function("edit", returns = Type.BOOL) {
+                    param("logId", Type.STRING)
+                    param("text", Type.STRING)
+                }
+                event("message") {
+                    field("room", Type.STRING)
+                    field("content", Type.STRING)
+                    field(
+                        "author",
+                        Type.struct {
+                            field("name", Type.STRING)
+                            optional("nickname", Type.STRING)
+                        },
+                    )
+                    optional("thread", Type.STRING)
+                }
+            }
+        val fit = assertIs<Fit.Accepted>(StandardApi.Bot.fit(newer))
+        assertEquals(listOf("bot.send(silent)", "bot.edit", "bot.message.thread"), fit.ignored)
+        assertEquals(listOf("send"), fit.spec.functions.map { it.name })
+        assertEquals(listOf("text", "room"), fit.spec.function("send")!!.params.map { it.name })
+
+        val message = fit.spec.event("message")!!
+        val payload =
+            mapOf(
+                "room" to Value.VString("r"),
+                "content" to Value.VString("c"),
+                "author" to vObject("name" to "a", "nickname" to "n"),
+                "thread" to Value.VString("t"),
+            )
+        val conformed = message.conform(payload)
+        assertEquals(mapOf("room" to Value.VString("r"), "content" to Value.VString("c"), "author" to vObject("name" to "a")), conformed)
+        assertNull(message.checkPayload(conformed))
+
+        val requiresUnknown =
+            moduleSpec("bot") {
+                function("send", returns = Type.BOOL) {
+                    param("text", Type.STRING)
+                    param("priority", Type.INT)
+                }
+            }
+        assertIs<Fit.Refused>(StandardApi.Bot.fit(requiresUnknown))
     }
 }

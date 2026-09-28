@@ -52,7 +52,7 @@ class MyEngineConformanceTest : JavaScriptEngineConformance() {
 const { api, events } = require('msgbot');
 globalThis.onMessage = (handler) => events.on('bot.message', (m) => handler({
   text: m.content, room: m.room, sender: m.author.name,
-  reply: (text) => api.bot.reply.async(m.replyToken, text),   // Promise 중심
+  reply: (text) => api.bot.reply.async({ text, token: m.replyToken, room: m.room, channelId: m.channelId }),   // Promise 중심
 }));
 ```
 
