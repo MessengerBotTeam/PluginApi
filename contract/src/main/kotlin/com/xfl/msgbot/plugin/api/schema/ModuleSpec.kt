@@ -115,12 +115,47 @@ data class ModuleSpec(
         )
     }
 
-    /** Whether everything [part] declares appears here with the same signature, at the same version. Docs may differ. */
-    fun covers(part: ModuleSpec): Boolean =
-        part.namespace == namespace &&
-            part.version == version &&
-            part.functions.all { declared -> function(declared.name)?.let { it.params == declared.params && it.returns == declared.returns } == true } &&
-            part.events.all { declared -> event(declared.name)?.fields == declared.fields }
+    /**
+     * Why [part] is not a compatible implementation of part of this standard, or null when it is.
+     *
+     * Compatible means: the same version; every function it declares exists here, answers the same
+     * type and takes a subset of these parameters with the same types, every required one
+     * included; every event it declares exists here and carries a subset of these fields on the
+     * same terms. So a provider built before an optional parameter or field was added stays
+     * compatible, and what it leaves out is simply absent from the script's `__api`.
+     */
+    fun incompatibility(part: ModuleSpec): String? {
+        if (part.namespace != namespace) return "it implements '${part.namespace}', not '$namespace'"
+        if (part.version != version) return "it implements $namespace v${part.version}, the standard is v$version"
+        for (declared in part.functions) {
+            val standard = function(declared.name) ?: return "$namespace has no function '${declared.name}'"
+            if (declared.returns != standard.returns) return "${qualified(declared.name)} answers ${declared.returns}, not ${standard.returns}"
+            subsetProblem(qualified(declared.name), "parameter", declared.params, standard.params)?.let { return it }
+        }
+        for (declared in part.events) {
+            val standard = event(declared.name) ?: return "$namespace has no event '${declared.name}'"
+            subsetProblem(qualified(declared.name), "field", declared.fields, standard.fields)?.let { return it }
+        }
+        return null
+    }
+
+    fun accepts(part: ModuleSpec): Boolean = incompatibility(part) == null
+
+    private fun subsetProblem(
+        member: String,
+        kind: String,
+        declared: List<Field>,
+        standard: List<Field>,
+    ): String? {
+        val byName = standard.associateBy { it.name }
+        for (field in declared) {
+            val expected = byName[field.name] ?: return "$member has no $kind '${field.name}'"
+            if (field.type != expected.type) return "$member's $kind '${field.name}' is ${field.type}, not ${expected.type}"
+        }
+        val names = declared.map { it.name }.toSet()
+        standard.firstOrNull { !it.optional && it.name !in names }?.let { return "$member leaves out the required $kind '${it.name}'" }
+        return null
+    }
 
     fun toValue(): Value.VObject =
         obj(

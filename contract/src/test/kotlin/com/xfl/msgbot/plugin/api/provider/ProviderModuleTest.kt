@@ -41,7 +41,7 @@ class ProviderModuleTest {
             }
         assertEquals(listOf("reply"), module.spec.functions.map { it.name })
         assertEquals(listOf("message"), module.spec.events.map { it.name })
-        assertTrue(StandardApi.Bot.covers(module.spec))
+        assertTrue(StandardApi.Bot.accepts(module.spec))
         val e = assertFailsWith<CallException> { module.call(ProviderCall("p", "send", Args.NONE)) }
         assertEquals(ErrorCode.UNKNOWN_FUNCTION, e.code)
         assertFailsWith<IllegalArgumentException> { implement(StandardApi.Bot) { handle("teleport") { } } }

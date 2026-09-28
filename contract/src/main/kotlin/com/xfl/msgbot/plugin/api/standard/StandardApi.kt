@@ -12,12 +12,16 @@ import com.xfl.msgbot.plugin.api.schema.nullable
 import com.xfl.msgbot.plugin.api.schema.struct
 
 /**
- * The modules every project can count on, and the one every message source implements. Profiles
- * build their facades on these; each namespace here has exactly one owner.
+ * The modules every project can count on, and the standards providers implement. Profiles build
+ * their facades on these.
  *
- * - [Project], [Log], [File], [Db], [Http], [Device]: answered by the host.
- * - [Bot]: answered by the project's message source. A source implements the parts it supports,
- *   with these exact signatures, and the host refuses one that does not.
+ * - [Project], [Log], [File], [Db], [Http], [Device], [Sys]: answered by the host, and only by it.
+ * - [Bot]: a standard. Providers implement compatible parts of it ([ModuleSpec.accepts]); a
+ *   project may combine several, one per member.
+ *
+ * Standards evolve by addition: a new function, event, optional parameter or optional field keeps
+ * the version, so providers built against an older one stay accepted. Only an incompatible change
+ * raises it.
  */
 object StandardApi {
     val Project: ModuleSpec =
@@ -100,9 +104,15 @@ object StandardApi {
             )
         }
 
+    /**
+     * Messaging, messenger-agnostic. Any number of providers may implement parts of it (a
+     * notification reader, a database reader, an Intent sender); a project composes them.
+     * Addresses are optional so each provider can take the one it understands: a reply token it
+     * issued, a room name, or a channel ID.
+     */
     val Bot: ModuleSpec =
         moduleSpec("bot") {
-            doc = "The messenger a project talks through, as far as its source supports it."
+            doc = "The messenger a project talks through, as far as its providers support it."
             function("reply", returns = Type.BOOL, doc = "Answer the message that carried this reply token.") {
                 param("token", Type.STRING)
                 param("text", Type.STRING)
@@ -110,20 +120,23 @@ object StandardApi {
             function("markRead", returns = Type.BOOL, doc = "Mark the message that carried this read token as read.") {
                 param("token", Type.STRING)
             }
-            function("send", returns = Type.BOOL) {
-                param("room", Type.STRING)
+            function("send", returns = Type.BOOL, doc = "Send to a room, found by whichever address the provider understands.") {
                 param("text", Type.STRING)
+                optional("room", Type.STRING)
+                optional("channelId", Type.STRING)
                 optional("packageName", Type.STRING)
             }
             function("canReply", returns = Type.BOOL) {
-                param("room", Type.STRING)
+                optional("room", Type.STRING)
+                optional("channelId", Type.STRING)
                 optional("packageName", Type.STRING)
             }
             function("markRoomRead", returns = Type.BOOL) {
-                param("room", Type.STRING)
+                optional("room", Type.STRING)
+                optional("channelId", Type.STRING)
                 optional("packageName", Type.STRING)
             }
-            function("image", returns = Type.BYTES.nullable(), doc = "The bytes behind an image token, while the source still has them.") {
+            function("image", returns = Type.BYTES.nullable(), doc = "The bytes behind an image token, while the provider still has them.") {
                 param("token", Type.STRING)
             }
 
@@ -146,25 +159,27 @@ object StandardApi {
                 optional("isMultiChat", Type.BOOL)
                 optional("isDebugRoom", Type.BOOL)
                 optional("image", Type.STRING, doc = "An image token")
-                optional("replyToken", Type.STRING, doc = "Absent when this message cannot be answered")
+                optional("replyToken", Type.STRING, doc = "Absent when this message cannot be answered by token")
                 optional("readToken", Type.STRING)
+                optional("extra", Type.map(Type.ANY), doc = "What only this provider knows (attachments, message type...), as it documents it.")
             }
-            event("notificationPosted") {
-                field("packageName", Type.STRING)
-                field("content", Type.STRING)
-                field("sender", Type.STRING)
-                field("room", Type.STRING)
-                field("logId", Type.STRING)
-            }
-            event("notificationRemoved") {
-                field("packageName", Type.STRING)
-                field("notificationId", Type.STRING)
+        }
+
+    /** Host services for profiles: which events the script listens to, so no other crosses to it. */
+    val Sys: ModuleSpec =
+        moduleSpec("sys") {
+            doc = "The script's own plumbing."
+            function("listen", doc = "Deliver only these events from now on. Until first called, every event is delivered.") {
+                param("events", Type.list(Type.STRING))
             }
         }
 
     /** Answered by the host for every project. */
-    val HOST: List<ModuleSpec> = listOf(Project, Log, File, Db, Http, Device)
+    val HOST: List<ModuleSpec> = listOf(Project, Log, File, Db, Http, Device, Sys)
 
-    /** No extension may claim these. `sys` is kept for the host's own later use. */
-    val RESERVED_NAMESPACES: Set<String> = HOST.map { it.namespace }.toSet() + Bot.namespace + "sys"
+    /** Namespaces no provider may publish: the host answers them. */
+    val HOST_NAMESPACES: Set<String> = HOST.map { it.namespace }.toSet()
+
+    /** Namespaces with a published standard: a provider may implement any compatible part of one. */
+    val STANDARDS: Map<String, ModuleSpec> = listOf(Bot).associateBy { it.namespace }
 }

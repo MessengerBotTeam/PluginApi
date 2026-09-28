@@ -57,12 +57,33 @@ class ModuleSpecTest {
     }
 
     @Test
-    fun `a partial implementation is covered by the standard it came from`() {
+    fun `a partial implementation of a standard is accepted, a changed signature is not`() {
         val part = StandardApi.Bot.restrictTo(listOf("reply"), listOf("message"))
         assertEquals(listOf("reply"), part.functions.map { it.name })
-        assertTrue(StandardApi.Bot.covers(part))
+        assertNull(StandardApi.Bot.incompatibility(part))
 
         val forged = moduleSpec("bot") { function("reply", returns = Type.BOOL) { param("text", Type.STRING) } }
-        assertFalse(StandardApi.Bot.covers(forged))
+        assertEquals("bot.reply leaves out the required parameter 'token'", StandardApi.Bot.incompatibility(forged))
+        val retyped = moduleSpec("bot") { function("reply", returns = Type.STRING) { param("token", Type.STRING); param("text", Type.STRING) } }
+        assertTrue(StandardApi.Bot.incompatibility(retyped)!!.contains("answers string"))
+        val invented = moduleSpec("bot") { function("teleport") }
+        assertTrue(StandardApi.Bot.incompatibility(invented)!!.contains("no function 'teleport'"))
+    }
+
+    @Test
+    fun `a provider built before an optional addition stays accepted`() {
+        // Written before bot.send learned channelId and packageName, and before message had extra.
+        val older =
+            moduleSpec("bot") {
+                function("send", returns = Type.BOOL) {
+                    param("text", Type.STRING)
+                    optional("room", Type.STRING)
+                }
+                event("message") {
+                    StandardApi.Bot.event("message")!!.fields.filter { it.name != "extra" }.forEach { field(it.name, it.type) }
+                }
+            }
+        assertTrue(StandardApi.Bot.accepts(older))
+        assertFalse(StandardApi.Bot.accepts(older.copy(version = 2)))
     }
 }
