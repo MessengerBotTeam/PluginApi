@@ -279,6 +279,34 @@ abstract class JavaScriptEngineConformance {
         assertEquals(listOf(Value.VArray(emptyList()), Value.VArray(listOf(Value.VString("tck.ping")))), listened)
     }
 
+    /**
+     * A profile shaped nothing like the app's own: one function per event, Promises throughout.
+     * That it runs on the kit alone is what lets anyone ship a new JavaScript API as a plugin.
+     */
+    @Test
+    fun aProfileOfAnyShapeRunsOnTheKitAlone() {
+        load(
+            profile =
+                """
+                var kit = require('msgbot');
+                globalThis.onPing = function (handler) {
+                    return kit.events.on('tck.ping', function (p) {
+                        return handler({ n: p.n, answer: function (v) { return kit.api.tck.echo.async(v); } });
+                    });
+                };
+                """.trimIndent(),
+            entry =
+                """
+                var answered = 'pending';
+                onPing(function (ping) { return ping.answer(ping.n * 2).then(function (v) { answered = v; }); });
+                """.trimIndent(),
+        )
+        harness.dispatch(ScriptEvent("tck.ping", mapOf("n" to Value.VInt(21))))
+
+        assertTrue(harness.awaitUntil { eval("answered") == Value.VInt(42) })
+        assertEquals(listOf<Value?>(Value.VInt(42)), harness.calls.filter { it.function == "tck.echo" }.map { it.args["value"] })
+    }
+
     @Test
     fun aScriptThatDoesNotParseFailsTheLoadNamingTheFile() {
         val e = assertFailsWith<EngineException> { load("var = ;") }

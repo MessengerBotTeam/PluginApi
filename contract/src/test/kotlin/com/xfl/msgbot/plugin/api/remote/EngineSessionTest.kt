@@ -24,7 +24,10 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
-/** A remote engine behaves like a local one: same requests in, same host calls out. */
+/**
+ * A remote engine behaves like a local one: same requests in, same host calls out. The engine is
+ * a language the contract has never heard of, as a plugin's would be.
+ */
 class EngineSessionTest {
     private val hostCalls = CopyOnWriteArrayList<Pair<String, Map<String, Value>>>()
     private val errors = CopyOnWriteArrayList<String>()
@@ -67,7 +70,7 @@ class EngineSessionTest {
             }
         }
 
-    /** Stands in for a language: understands a few commands in place of real source. */
+    /** Stands in for a plugin's language: understands a few commands in place of real source. */
     private class FakeEngine(private val context: EngineContext) : ScriptEngine {
         var loaded: LoadRequest? = null
         val seen = CopyOnWriteArrayList<String>()
