@@ -1,6 +1,7 @@
 package com.xfl.msgbot.plugin.api.remote
 
 import com.xfl.msgbot.plugin.api.binding.Binding
+import com.xfl.msgbot.plugin.api.binding.LuaBinding
 import com.xfl.msgbot.plugin.api.call.CallResult
 import com.xfl.msgbot.plugin.api.engine.EngineContext
 import com.xfl.msgbot.plugin.api.engine.EngineException
@@ -19,8 +20,10 @@ import org.luaj.vm2.LuaError
 import org.luaj.vm2.LuaTable
 import org.luaj.vm2.LuaValue
 import org.luaj.vm2.Varargs
+import org.luaj.vm2.lib.OneArgFunction
+import org.luaj.vm2.lib.ThreeArgFunction
 import org.luaj.vm2.lib.TwoArgFunction
-import org.luaj.vm2.lib.VarArgFunction
+import org.luaj.vm2.lib.ZeroArgFunction
 import org.luaj.vm2.lib.jse.JsePlatform
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
@@ -32,6 +35,7 @@ import kotlin.test.assertEquals
  * profile builds its API from `__api` and calls with named arguments like any other.
  */
 class LuaProfileContractTest {
+    /** A Lua engine keeping the Lua binding (docs/bindings/lua.md), minus timers and modules. */
     private class LuaFixture(private val context: EngineContext) : ScriptEngine {
         private val globals = JsePlatform.standardGlobals()
 
@@ -42,15 +46,36 @@ class LuaProfileContractTest {
                     override fun call(
                         name: LuaValue,
                         args: LuaValue,
-                    ): LuaValue {
-                        val named = if (args.istable()) args.checktable().entries().associate { (k, v) -> k.checkjstring() to fromLua(v) } else emptyMap()
-                        return when (val result = context.host.call(name.checkjstring(), named)) {
+                    ): LuaValue =
+                        when (val result = context.host.call(name.checkjstring(), namedArgs(args))) {
                             is CallResult.Ok -> toLua(result.value)
-                            is CallResult.Err -> throw LuaError("${result.code}: ${result.message}")
+                            is CallResult.Err -> throw LuaError(errorOf(name.checkjstring(), result))
                         }
+                },
+            )
+            globals.set(
+                Binding.HOST_CALL_ASYNC,
+                object : ThreeArgFunction() {
+                    override fun call(
+                        name: LuaValue,
+                        args: LuaValue,
+                        callback: LuaValue,
+                    ): LuaValue {
+                        val function = name.checkjstring()
+                        context.host.callAsync(function, namedArgs(args)) { result ->
+                            when (result) {
+                                is CallResult.Ok -> callback.call(toLua(result.value), LuaValue.NIL)
+                                is CallResult.Err -> callback.call(LuaValue.NIL, errorOf(function, result))
+                            }
+                        }
+                        return LuaValue.NIL
                     }
                 },
             )
+            val kit = globals.load(LuaBinding.KIT, "msgbot")
+            globals.get("package").get("preload").set(LuaBinding.KIT_NAME, object : ZeroArgFunction() {
+                override fun call(): LuaValue = kit.call()
+            })
         }
 
         override fun load(request: LoadRequest) {
@@ -64,12 +89,31 @@ class LuaProfileContractTest {
         }
 
         override fun dispatch(event: ScriptEvent) {
-            globals.get(Binding.DISPATCH).call(LuaValue.valueOf(event.name), toLua(Value.VObject(event.payload)))
+            val dispatch = globals.get(Binding.DISPATCH)
+            if (!dispatch.isnil()) dispatch.call(LuaValue.valueOf(event.name), toLua(Value.VObject(event.payload)))
         }
 
         override fun eval(source: String): Value = fromLua(globals.load(source, "eval").call())
 
         override fun close() = Unit
+
+        /** The binding's error: a table with code and message that prints as "code: message". */
+        private fun errorOf(
+            function: String,
+            err: CallResult.Err,
+        ): LuaTable {
+            val message = "$function: ${err.message}"
+            val error = LuaTable()
+            error.set("code", err.code)
+            error.set("message", message)
+            error.setmetatable(LuaTable().apply { set("__tostring", object : OneArgFunction() {
+                override fun call(self: LuaValue): LuaValue = LuaValue.valueOf("${err.code}: $message")
+            }) })
+            return error
+        }
+
+        private fun namedArgs(args: LuaValue): Map<String, Value> =
+            if (args.istable()) args.checktable().entries().associate { (k, v) -> k.checkjstring() to fromLua(v) } else emptyMap()
 
         private fun LuaTable.entries(): List<Pair<LuaValue, LuaValue>> {
             val out = mutableListOf<Pair<LuaValue, LuaValue>>()
@@ -102,8 +146,10 @@ class LuaProfileContractTest {
                 value.isnumber() -> Value.VDouble(value.todouble())
                 value.isstring() -> Value.VString(value.tojstring())
                 value.istable() -> {
-                    val entries = value.checktable().entries()
-                    if (entries.all { it.first.isinttype() }) {
+                    val table = value.checktable()
+                    val entries = table.entries()
+                    val markedList = table.getmetatable()?.get("__msgbot_list")?.toboolean() == true
+                    if (entries.isNotEmpty() && entries.all { it.first.isinttype() } || markedList && entries.isEmpty()) {
                         Value.VArray(entries.sortedBy { it.first.toint() }.map { fromLua(it.second) })
                     } else {
                         Value.VObject(entries.associate { (k, v) -> k.tojstring() to fromLua(v) })
@@ -118,12 +164,14 @@ class LuaProfileContractTest {
             function("forecast", returns = Type.STRING) { param("city", Type.STRING) }
             function("fail")
             event("alert") { field("text", Type.STRING) }
+            event("storm") { field("text", Type.STRING) }
         }
 
     @Test
     fun `a Lua profile reaches the standard bot and a new provider through the same contract`() {
         val (hostSide, pluginSide) = LoopbackTransport.pair()
         val replies = CopyOnWriteArrayList<Map<String, Value>>()
+        val listened = CopyOnWriteArrayList<Value>()
         val thread = EngineThread("host-engine")
         val pool = Executors.newCachedThreadPool()
         val context =
@@ -140,6 +188,10 @@ class LuaProfileContractTest {
                                 "bot.reply" -> {
                                     replies += args
                                     CallResult.ok(Value.TRUE)
+                                }
+                                "sys.listen" -> {
+                                    listened += args.getValue("events")
+                                    CallResult.ok()
                                 }
                                 else -> CallResult.unknownFunction(function)
                             }
@@ -163,7 +215,7 @@ class LuaProfileContractTest {
             engine.load(
                 LoadRequest(
                     language = "lua",
-                    api = listOf(StandardApi.Bot.restrictTo(listOf("reply"), listOf("message")), weather),
+                    api = listOf(StandardApi.Bot.restrictTo(listOf("reply"), listOf("message")), weather, StandardApi.Sys),
                     profile = ProfileScript("minimal_api2.lua", javaClass.getResource("/profiles/minimal_api2.lua")!!.readText()),
                     entry = "main.lua",
                     sources =
@@ -174,7 +226,8 @@ class LuaProfileContractTest {
                                 bot.on('message', function(msg) msg.reply(Api.weather.forecast(msg.room) .. ' / ' .. msg.content) end)
                                 bot.on('weather.alert', function(event) received = event.text end)
                                 local ok, err = pcall(Api.weather.fail)
-                                failure = (not ok) and err or 'no error'
+                                failure = (not ok) and (err.code .. ' / ' .. tostring(err)) or 'no error'
+                                Api.weather.forecast.async(function(value, err) later = value end, 'Busan')
                                 """.trimIndent(),
                         ),
                 ),
@@ -184,7 +237,10 @@ class LuaProfileContractTest {
 
             assertEquals(listOf(mapOf("token" to Value.VString("t1"), "text" to Value.VString("sunny in Seoul / hi"))), replies.toList())
             assertEquals(Value.VString("rain"), engine.eval("return received"))
-            assertEquals(Value.VString("unavailable: offline"), engine.eval("return failure"))
+            assertEquals(Value.VString("unavailable / unavailable: weather.fail: offline"), engine.eval("return failure"))
+            assertEquals(Value.VString("sunny in Busan"), engine.eval("return later"))
+            // The storm nobody listens to is never asked for: the kit told the host what to deliver.
+            assertEquals(Value.VArray(listOf(Value.VString("bot.message"), Value.VString("weather.alert"))), listened.last())
         } finally {
             engine.close()
             endpoint.close()

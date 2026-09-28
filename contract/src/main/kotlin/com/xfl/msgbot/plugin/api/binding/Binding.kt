@@ -25,20 +25,58 @@ object Binding {
 
 /** What the JavaScript binding shares between engines. */
 object JavaScriptBinding {
+    /** The profile kit's module name: `require('msgbot')`. */
+    const val KIT = "msgbot"
+
     /**
-     * A CommonJS `require` over the project's sources. Evaluating it yields
-     * `function (sources, compile, fallback)` returning `makeRequire(fromPath)`:
+     * A CommonJS `require` over the project's sources and the binding's builtin modules.
+     * Evaluating it yields `function (sources, compile, fallback)` returning `makeRequire(fromPath)`:
      *
      * - `sources`: `{path: text}`, from [com.xfl.msgbot.plugin.api.engine.LoadRequest.sources]
      * - `compile(path, text)`: the engine's way of turning a module into
      *   `function (exports, require, module, __filename, __dirname)`
-     * - `fallback(specifier)`: the runtime's own `require` for anything that is not a relative
-     *   path (Node's builtins and packages), or null
+     * - `fallback(specifier)`: the runtime's own `require` for anything that is neither a relative
+     *   path nor a builtin (Node's own modules and packages), or null
      *
-     * Engines set the global `require` to `makeRequire(entry)` before running the entry.
+     * Engines set the global `require` to `makeRequire(entry)` before running the profile.
      */
     val MODULE_LOADER: String by lazy {
-        checkNotNull(JavaScriptBinding::class.java.getResourceAsStream("javascript/modules.js")) { "modules.js is missing from the PluginApi jar" }
+        resource("modules.js").replace("/*BUILTINS*/null", jsonObject(mapOf(KIT to resource("kit.js"))))
+    }
+
+    private fun resource(name: String): String =
+        checkNotNull(JavaScriptBinding::class.java.getResourceAsStream("javascript/$name")) { "$name is missing from the PluginApi jar" }
+            .bufferedReader(Charsets.UTF_8)
+            .use { it.readText() }
+
+    private fun jsonObject(entries: Map<String, String>): String = entries.entries.joinToString(prefix = "{", postfix = "}") { (k, v) -> "${jsonString(k)}: ${jsonString(v)}" }
+
+    private fun jsonString(text: String): String =
+        buildString {
+            append('"')
+            for (c in text) {
+                when {
+                    c == '"' -> append("\\\"")
+                    c == '\\' -> append("\\\\")
+                    c == '\n' -> append("\\n")
+                    c == '\r' -> append("\\r")
+                    c == '\t' -> append("\\t")
+                    c < ' ' || c == '\u2028' || c == '\u2029' -> append("\\u%04x".format(c.code))
+                    else -> append(c)
+                }
+            }
+            append('"')
+        }
+}
+
+/** What the Lua binding shares between engines. */
+object LuaBinding {
+    /** The profile kit's module name: `require("msgbot")`. */
+    const val KIT_NAME = "msgbot"
+
+    /** The kit's source, a Lua chunk returning the kit. Engines serve it as `require("msgbot")`. */
+    val KIT: String by lazy {
+        checkNotNull(LuaBinding::class.java.getResourceAsStream("lua/kit.lua")) { "kit.lua is missing from the PluginApi jar" }
             .bufferedReader(Charsets.UTF_8)
             .use { it.readText() }
     }

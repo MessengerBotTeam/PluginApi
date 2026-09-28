@@ -4,11 +4,16 @@
  *
  * Evaluates to function (sources, compile, fallback) -> makeRequire(fromPath).
  * Written in ES5 so every JavaScript engine can run it unchanged.
+ *
+ * Besides the project's own files it serves the binding's builtin modules (require('msgbot')),
+ * so every engine that uses this loader offers them without doing anything.
  */
 (function (sources, compile, fallback) {
     'use strict';
     var has = Object.prototype.hasOwnProperty;
     var cache = Object.create(null);
+    var builtins = /*BUILTINS*/null;
+    var BUILTIN = 'builtin:';
 
     function normalize(path) {
         var out = [];
@@ -31,10 +36,10 @@
         return slash < 0 ? '' : path.substring(0, slash);
     }
 
-    // null: not a project path, so the runtime's own require may know it.
+    // null: neither a project path nor a builtin, so the runtime's own require may know it.
     function resolve(specifier, from) {
         var relative = specifier.indexOf('./') === 0 || specifier.indexOf('../') === 0;
-        if (!relative && specifier.charAt(0) !== '/') return null;
+        if (!relative && specifier.charAt(0) !== '/') return has.call(builtins, specifier) ? BUILTIN + specifier : null;
         var base = normalize(relative ? dirname(from) + '/' + specifier : specifier);
         if (base === null) throw new Error("Cannot find module '" + specifier + "': it is outside the project");
         var candidates = [base, base + '.js', base + '.json', base + '/index.js'];
@@ -50,10 +55,12 @@
         var module = { id: path, filename: path, exports: {}, loaded: false };
         cache[path] = module;
         try {
-            if (/\.json$/.test(path)) {
-                module.exports = JSON.parse(sources[path]);
+            var builtin = path.indexOf(BUILTIN) === 0;
+            var source = builtin ? builtins[path.substring(BUILTIN.length)] : sources[path];
+            if (!builtin && /\.json$/.test(path)) {
+                module.exports = JSON.parse(source);
             } else {
-                compile(path, sources[path]).call(module.exports, module.exports, makeRequire(path), module, path, dirname(path));
+                compile(path, source).call(module.exports, module.exports, makeRequire(path), module, path, builtin ? '' : dirname(path));
             }
         } catch (e) {
             delete cache[path];

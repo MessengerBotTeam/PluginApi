@@ -14,6 +14,7 @@ import com.xfl.msgbot.plugin.api.engine.ScriptEngine
 import com.xfl.msgbot.plugin.api.engine.ScriptEvent
 import com.xfl.msgbot.plugin.api.schema.Type
 import com.xfl.msgbot.plugin.api.schema.moduleSpec
+import com.xfl.msgbot.plugin.api.standard.StandardApi
 import com.xfl.msgbot.plugin.api.value.Value
 import com.xfl.msgbot.plugin.api.value.vArray
 import com.xfl.msgbot.plugin.api.value.vObject
@@ -55,6 +56,7 @@ abstract class JavaScriptEngineConformance {
                 function("mark") { param("label", Type.STRING) }
                 event("ping") { field("n", Type.INT) }
             },
+            StandardApi.Sys,
         )
 
     @Before
@@ -64,6 +66,7 @@ abstract class JavaScriptEngineConformance {
         harness.functions["tck.values"] = { CallResult.ok(HOST_VALUES) }
         harness.functions["tck.fail"] = { args -> CallResult.Err((args["code"] as Value.VString).value, (args["message"] as Value.VString).value) }
         harness.functions["tck.mark"] = { CallResult.ok() }
+        harness.functions["sys.listen"] = { CallResult.ok() }
     }
 
     @After
@@ -92,7 +95,10 @@ abstract class JavaScriptEngineConformance {
                 """.trimIndent(),
             entry = "var entrySawProfile = typeof profileSaw;",
         )
-        assertEquals(Value.VString("tck:echo(value any)any,values()any,fail(code string,message string)void,mark(label string)void|ping"), eval("profileSaw"))
+        assertEquals(
+            Value.VString("tck:echo(value any)any,values()any,fail(code string,message string)void,mark(label string)void|ping;sys:listen(events list<string>)void|"),
+            eval("profileSaw"),
+        )
         assertEquals(Value.VString("string"), eval("entrySawProfile"))
     }
 
@@ -243,6 +249,34 @@ abstract class JavaScriptEngineConformance {
         )
         assertEquals(Value.VString("42:true:lib"), eval("result"))
         assertTrue((eval("missing") as Value.VString).value.contains("nope"))
+    }
+
+    @Test
+    fun requireMsgbotGivesProfilesTheKit() {
+        load(
+            profile =
+                """
+                var kit = require('msgbot');
+                kit.api.tck.mark('positional');
+                kit.api.tck.mark({ label: 'named' });
+                var available = [kit.isAvailable('tck.echo'), kit.isAvailable('tck.ping'), kit.isAvailable('tck.nope')].join(',');
+                var viaKit = 'pending';
+                kit.api.tck.echo.async(9).then(function (v) { viaKit = v; });
+                var refused;
+                try { kit.events.on('tck.nope', function () {}); } catch (e) { refused = e.message; }
+                kit.events.on('tck.ping', function (p) { kit.api.tck.mark('ping ' + p.n); });
+                """.trimIndent(),
+            entry = "var sameKit = require('msgbot') === kit;",
+        )
+        harness.dispatch(ScriptEvent("tck.ping", mapOf("n" to Value.VInt(5))))
+
+        assertEquals(listOf("positional", "named", "ping 5"), marks().map { (it.args["label"] as Value.VString).value })
+        assertEquals(Value.VString("true,true,false"), eval("available"))
+        assertEquals(Value.TRUE, eval("sameKit"))
+        assertTrue((eval("refused") as Value.VString).value.contains("never delivered"))
+        assertTrue(harness.awaitUntil { eval("viaKit") == Value.VInt(9) })
+        val listened = harness.calls.filter { it.function == "sys.listen" }.map { it.args["events"] }
+        assertEquals(listOf(Value.VArray(emptyList()), Value.VArray(listOf(Value.VString("tck.ping")))), listened)
     }
 
     @Test
