@@ -160,6 +160,19 @@ abstract class JavaScriptEngineConformance {
     }
 
     @Test
+    fun valuesThatCannotCrossAreRefusedWhereTheyArePassed() {
+        load(
+            """
+            var sync, async;
+            try { __host_call('tck.echo', { value: function () {} }); } catch (e) { sync = e instanceof TypeError; }
+            try { __host_call_async('tck.echo', { value: function () {} }); } catch (e) { async = e instanceof TypeError; }
+            """.trimIndent(),
+        )
+        assertEquals(Value.VString("true/true"), eval("sync + '/' + async"))
+        assertTrue(harness.calls.isEmpty(), "the host never saw them: ${harness.calls}")
+    }
+
+    @Test
     fun dispatchCallsDispatchWithNameAndPayloadAndWaitsForItsHostCalls() {
         load(
             profile = "var __dispatch = function (name, payload) { __host_call('tck.mark', { label: name + ':' + payload.n }); };",

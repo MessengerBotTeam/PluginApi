@@ -44,7 +44,7 @@ class MyEngineConformanceTest : JavaScriptEngineConformance() {
 | `VArray` | `Array` (`undefined` 원소는 `null`) | `Array` |
 | `VObject` | 평범한 객체 (`undefined`인 속성은 뺀다) | 평범한 객체 |
 
-함수, 심볼, 클래스 인스턴스 같은 다른 값을 넘기면 호출이 오류로 끝난다.
+함수, 심볼, 클래스 인스턴스 같은 다른 값은 넘길 수 없다. 이런 값을 넘기면 `__host_call`과 `__host_call_async` 모두 호출한 자리에서 `TypeError`를 던지며, 호스트에는 아무것도 전달되지 않는다.
 
 ## 오류
 
