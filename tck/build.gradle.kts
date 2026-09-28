@@ -15,7 +15,8 @@ dependencies {
 }
 
 kotlin {
-    jvmToolchain(21)
+    // 17: what Android apps (the host and every plugin) compile against, so inline functions cross.
+    jvmToolchain(17)
 }
 
 publishing {
