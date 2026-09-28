@@ -1,41 +1,9 @@
 plugins {
-    kotlin("jvm") version "2.2.0"
-    `maven-publish`
+    kotlin("jvm") version "2.4.10" apply false
+    id("com.android.library") version "9.3.2" apply false
 }
 
-group = "com.xfl.msgbot.plugin.api"
-version = "1.0-SNAPSHOT"
-
-repositories {
-    mavenCentral()
-}
-
-dependencies {
-    testImplementation(kotlin("test"))
-}
-
-tasks.test {
-    useJUnitPlatform()
-}
-kotlin {
-    jvmToolchain(21)
-}
-
-publishing {
-    repositories {
-        maven {
-            name = "GitHubPackages"
-            url = uri("https://maven.pkg.github.com/MessengerBotTeam/PluginAPI")
-            credentials {
-                username = project.findProperty("gpr.user") as String? ?: System.getenv("USERNAME")
-                password = project.findProperty("gpr.key") as String? ?: System.getenv("TOKEN")
-            }
-        }
-    }
-
-    publications {
-        register<MavenPublication>("gpr") {
-            from(components["java"])
-        }
-    }
+allprojects {
+    group = "com.xfl.msgbot.plugin.api"
+    version = "3.0.0-SNAPSHOT"
 }
