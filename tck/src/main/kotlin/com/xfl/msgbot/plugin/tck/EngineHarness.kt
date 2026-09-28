@@ -27,7 +27,7 @@ import java.util.concurrent.TimeUnit
  * it. Useful on its own for an engine's tests beyond the conformance suite.
  */
 class EngineHarness(factory: ScriptEngineFactory) : AutoCloseable {
-    /** One host call as the host saw it, and which thread made it. */
+    /** One host call as the host saw it, synchronous or not, and which thread made it. */
     data class Call(val function: String, val args: Map<String, Value>, val thread: String)
 
     val threadName = "tck-engine"
@@ -57,6 +57,7 @@ class EngineHarness(factory: ScriptEngineFactory) : AutoCloseable {
                         args: Map<String, Value>,
                         onResult: (CallResult) -> Unit,
                     ) {
+                        calls += Call(function, args, Thread.currentThread().name)
                         worker.execute {
                             val result = functions[function]?.invoke(args) ?: CallResult.unknownFunction(function)
                             thread.post { onResult(result) }
