@@ -9,11 +9,13 @@ import com.xfl.msgbot.plugin.api.provider.ProviderContext
 import com.xfl.msgbot.plugin.api.provider.emit
 import com.xfl.msgbot.plugin.api.provider.implement
 import com.xfl.msgbot.plugin.api.provider.provide
-import com.xfl.msgbot.plugin.api.standard.StandardApi
 import com.xfl.msgbot.plugin.api.rpc.LoopbackTransport
 import com.xfl.msgbot.plugin.api.schema.Type
+import com.xfl.msgbot.plugin.api.standard.StandardApi
 import com.xfl.msgbot.plugin.api.value.Value
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import kotlin.test.AfterTest
@@ -25,6 +27,8 @@ import kotlin.test.assertTrue
 class ProviderSessionTest {
     private class Weather : Provider {
         var context: ProviderContext? = null
+        val pending = CompletableFuture<String>()
+        val waiting = CountDownLatch(1)
         val emitFailures = CopyOnWriteArrayList<String>()
 
         override val modules =
@@ -39,6 +43,12 @@ class ProviderSessionTest {
                     }
                 }
                 function("broken") { handle { throw CallException.unavailable("service down") } }
+                function("slow", returns = Type.STRING) {
+                    handleAsync { pending.also { waiting.countDown() } }
+                }
+                function("failsLater") {
+                    handleAsync { CompletableFuture.supplyAsync { throw CallException.badArgs("checked later") } }
+                }
                 function("announce") {
                     handle { call ->
                         context!!.emit("weather.alert", "text" to "rain", projectId = call.projectId)
@@ -154,5 +164,23 @@ class ProviderSessionTest {
         remote.start(hostContext)
         remote.stop()
         assertEquals(null, weather.context)
+    }
+
+    @Test
+    fun `an asynchronous handler leaves the provider free until it answers`() {
+        remote.start(hostContext)
+        val slow = CompletableFuture.supplyAsync { call("alpha", "weather.slow", Args.NONE) }
+        assertTrue(weather.waiting.await(5, TimeUnit.SECONDS))
+        // The provider's thread is not held by the pending call.
+        assertEquals(Value.VString("Seoul: 20F x1"), call("alpha", "weather.forecast", Args.of("city" to "Seoul")))
+        assertTrue(!slow.isDone)
+        weather.pending.complete("later")
+        assertEquals(Value.VString("later"), slow.get(5, TimeUnit.SECONDS))
+    }
+
+    @Test
+    fun `an asynchronous failure keeps its code across the boundary`() {
+        val e = assertFailsWith<CallException> { call("alpha", "weather.failsLater", Args.NONE) }
+        assertEquals(ErrorCode.BAD_ARGS, e.code)
     }
 }

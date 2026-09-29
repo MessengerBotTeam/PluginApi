@@ -6,8 +6,8 @@ import com.xfl.msgbot.plugin.api.serialization.BytesChannel
 import com.xfl.msgbot.plugin.api.value.Value
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -157,5 +157,61 @@ class RpcPeerTest {
         val answer = host.request("deep", timeoutMs = 10_000)
         assertTrue((answer as CallResult.Err).message.contains("could not be sent"), answer.message)
         assertTrue(System.nanoTime() - started < 5_000_000_000L, "answered at once")
+    }
+
+    /** Mimics a full one-way Binder buffer: refuses the next [refusals] frames, whatever their size. */
+    private class CrowdedTransport(
+        private val inner: PluginTransport,
+        @Volatile var refusals: Int,
+    ) : PluginTransport by inner {
+        private val store = ConcurrentHashMap<Long, ByteArray>()
+        private val ids = AtomicLong()
+        val refused = AtomicLong()
+
+        override val bytes =
+            object : BytesChannel {
+                override fun offload(bytes: ByteArray): Long? = null
+
+                override fun offloadFrame(frame: ByteArray): Long = ids.incrementAndGet().also { store[it] = frame }
+
+                override fun resolve(
+                    transferId: Long,
+                    length: Int,
+                ): ByteArray = store.remove(transferId)!!
+            }
+
+        override fun send(frame: ByteArray) {
+            if (refusals > 0) {
+                refusals--
+                refused.incrementAndGet()
+                throw IllegalStateException("no async space left")
+            }
+            inner.send(frame)
+        }
+    }
+
+    @Test
+    fun `a frame the transport refuses is sent again out of band`() {
+        val (hostEnd, pluginEnd) = LoopbackTransport.pair()
+        // The plugin's answers share its channel, so both ends resolve from one store.
+        val crowdedHost = CrowdedTransport(hostEnd, refusals = 0)
+        val crowdedPlugin = CrowdedTransport(pluginEnd, refusals = 0)
+        val asker = RpcPeer(crowdedHost, echo)
+        val answerer =
+            RpcPeer(
+                object : PluginTransport by crowdedPlugin {
+                    override val bytes = crowdedHost.bytes
+                },
+                echo,
+            )
+        try {
+            crowdedHost.refusals = 2
+            val message = Value.VString("카톡".repeat(2_000))
+            assertEquals(CallResult.ok(message), asker.request("echo", message, 5_000))
+            assertEquals(2L, crowdedHost.refused.get())
+        } finally {
+            asker.close()
+            answerer.close()
+        }
     }
 }

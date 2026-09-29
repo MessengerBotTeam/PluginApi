@@ -17,18 +17,64 @@ import com.xfl.msgbot.plugin.api.schema.ModuleSpec
 import com.xfl.msgbot.plugin.api.schema.SchemaDsl
 import com.xfl.msgbot.plugin.api.schema.Type
 import com.xfl.msgbot.plugin.api.value.Value
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CompletionException
+import java.util.concurrent.CompletionStage
 
-/** A module spec and its implementation. Build with [provide] or [implement]. */
+/**
+ * A module spec and its implementation. Build with [provide] or [implement].
+ *
+ * A call fails with [CallException] for a specific [ErrorCode]; any other exception means
+ * [ErrorCode.FAILED].
+ */
 class ProviderModule(
     val spec: ModuleSpec,
-    private val dispatch: (ProviderCall) -> Value,
+    private val dispatch: Dispatch,
 ) {
-    /** Throws [CallException] for a specific [ErrorCode]; other exceptions mean [ErrorCode.FAILED]. */
-    fun call(call: ProviderCall): Value = dispatch(call)
+    /** Answers a call now or later; the stage may complete on any thread. */
+    fun interface Dispatch {
+        fun call(call: ProviderCall): CompletionStage<Value>
+    }
+
+    constructor(spec: ModuleSpec, handler: (ProviderCall) -> Value) : this(spec, Dispatch { call -> answerNow { handler(call) } })
+
+    fun callAsync(call: ProviderCall): CompletableFuture<Value> =
+        try {
+            dispatch.call(call).toCompletableFuture()
+        } catch (e: Exception) {
+            CompletableFuture.failedFuture(e)
+        }
+
+    /** [callAsync], waiting for the answer. */
+    fun call(call: ProviderCall): Value =
+        try {
+            callAsync(call).join()
+        } catch (e: CompletionException) {
+            throw e.cause ?: e
+        }
 }
 
-/** Returns a [Value] or anything [Value.of] converts. */
+/** Returns a [Value] or anything [Value.of] converts. Runs on the provider's thread. */
 typealias Handler = (ProviderCall) -> Any?
+
+/**
+ * Starts on the provider's thread and returns at once; the stage completes later from any thread
+ * with a [Value] or anything [Value.of] converts. The provider's thread is free meanwhile.
+ */
+typealias AsyncHandler = (ProviderCall) -> CompletionStage<*>
+
+internal sealed interface Implementation {
+    class Now(val handler: Handler) : Implementation
+
+    class Later(val handler: AsyncHandler) : Implementation
+}
+
+private inline fun answerNow(block: () -> Value): CompletableFuture<Value> =
+    try {
+        CompletableFuture.completedFuture(block())
+    } catch (e: Exception) {
+        CompletableFuture.failedFuture(e)
+    }
 
 /** Declares and implements a module. Every function needs a [ProviderFunctionBuilder.handle]. */
 fun provide(
@@ -38,7 +84,7 @@ fun provide(
 ): ProviderModule {
     val builder = ProviderModuleBuilder().apply(block)
     val spec = ModuleSpec(namespace, version, builder.functions.map { it.first }, builder.events.toList(), builder.doc)
-    return ProviderModule(spec, dispatcher(spec, builder.functions.associate { (function, handler) -> function.name to handler }))
+    return ProviderModule(spec, dispatcher(spec, builder.functions.associate { (function, implementation) -> function.name to implementation }))
 }
 
 /**
@@ -56,19 +102,20 @@ fun implement(
 
 private fun dispatcher(
     spec: ModuleSpec,
-    handlers: Map<String, Handler>,
-): (ProviderCall) -> Value =
-    { call ->
-        val handler =
-            handlers[call.function]
-                ?: throw CallException(ErrorCode.UNKNOWN_FUNCTION, "${spec.namespace} has no function '${call.function}'")
-        Value.of(handler(call))
+    implementations: Map<String, Implementation>,
+): ProviderModule.Dispatch =
+    ProviderModule.Dispatch { call ->
+        when (val implementation = implementations[call.function]) {
+            null -> CompletableFuture.failedFuture(CallException(ErrorCode.UNKNOWN_FUNCTION, "${spec.namespace} has no function '${call.function}'"))
+            is Implementation.Now -> answerNow { Value.of(implementation.handler(call)) }
+            is Implementation.Later -> implementation.handler(call).thenApply { Value.of(it) }
+        }
     }
 
 @SchemaDsl
 class ProviderModuleBuilder internal constructor() {
     var doc: String = ""
-    internal val functions = mutableListOf<Pair<FunctionSpec, Handler>>()
+    internal val functions = mutableListOf<Pair<FunctionSpec, Implementation>>()
     internal val events = mutableListOf<EventSpec>()
 
     fun function(
@@ -78,8 +125,8 @@ class ProviderModuleBuilder internal constructor() {
         block: ProviderFunctionBuilder.() -> Unit,
     ) {
         val builder = ProviderFunctionBuilder(name, returns, doc).apply(block)
-        val handler = builder.handler ?: throw IllegalArgumentException("Function '$name' has no handle { } block")
-        functions += builder.buildSpec() to handler
+        val implementation = builder.implementation ?: throw IllegalArgumentException("Function '$name' has no handle { } block")
+        functions += builder.buildSpec() to implementation
     }
 
     fun event(
@@ -96,11 +143,16 @@ class ProviderFunctionBuilder internal constructor(
     returns: Type,
     doc: String,
 ) : FunctionSpecBuilder(name, returns, doc) {
-    internal var handler: Handler? = null
+    internal var implementation: Implementation? = null
+        private set
 
-    fun handle(handler: Handler) {
-        check(this.handler == null) { "handle { } given twice" }
-        this.handler = handler
+    fun handle(handler: Handler) = set(Implementation.Now(handler))
+
+    fun handleAsync(handler: AsyncHandler) = set(Implementation.Later(handler))
+
+    private fun set(implementation: Implementation) {
+        check(this.implementation == null) { "handle { } given twice" }
+        this.implementation = implementation
     }
 
     internal fun buildSpec(): FunctionSpec = build()
@@ -108,15 +160,25 @@ class ProviderFunctionBuilder internal constructor(
 
 @SchemaDsl
 class ImplementationBuilder internal constructor(private val spec: ModuleSpec) {
-    internal val handlers = linkedMapOf<String, Handler>()
+    internal val handlers = linkedMapOf<String, Implementation>()
     internal val emitted = linkedSetOf<String>()
 
     fun handle(
         function: String,
         handler: Handler,
+    ) = set(function, Implementation.Now(handler))
+
+    fun handleAsync(
+        function: String,
+        handler: AsyncHandler,
+    ) = set(function, Implementation.Later(handler))
+
+    private fun set(
+        function: String,
+        implementation: Implementation,
     ) {
         require(spec.function(function) != null) { "${spec.namespace} declares no function '$function'" }
-        require(handlers.put(function, handler) == null) { "'$function' handled twice" }
+        require(handlers.put(function, implementation) == null) { "'$function' handled twice" }
     }
 
     /** Only these events are published. */
@@ -128,12 +190,16 @@ class ImplementationBuilder internal constructor(private val spec: ModuleSpec) {
 
 /** Wraps this module with [Fit.Accepted.spec], dropping arguments the provider does not accept and result fields the host does not know. */
 fun ProviderModule.fittedTo(fit: Fit.Accepted): ProviderModule =
-    ProviderModule(fit.spec) { call ->
-        val understood = fit.accepts[call.function]
-        val args = if (understood == null) call.args else Args(call.args.values.filterKeys { it in understood })
-        val result = call(ProviderCall(call.projectId, call.function, args, call.options))
-        fit.spec.function(call.function)?.conformResult(result) ?: result
-    }
+    ProviderModule(
+        fit.spec,
+        ProviderModule.Dispatch { call ->
+            val understood = fit.accepts[call.function]
+            val args = if (understood == null) call.args else Args(call.args.values.filterKeys { it in understood })
+            callAsync(ProviderCall(call.projectId, call.function, args, call.options)).thenApply { result ->
+                fit.spec.function(call.function)?.conformResult(result) ?: result
+            }
+        },
+    )
 
 /** Throws if two modules share a namespace. */
 fun Provider.modulesByNamespace(): Map<String, ProviderModule> {

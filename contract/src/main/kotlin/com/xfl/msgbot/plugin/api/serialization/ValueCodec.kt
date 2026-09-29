@@ -16,6 +16,9 @@ interface BytesChannel {
     /** Returns a transfer ID, or null to keep [bytes] inline. */
     fun offload(bytes: ByteArray): Long?
 
+    /** Like [offload] for a whole encoded frame, whatever its size; null when this channel cannot. */
+    fun offloadFrame(frame: ByteArray): Long? = offload(frame)
+
     /** Throws if [transferId] is unknown. */
     fun resolve(
         transferId: Long,

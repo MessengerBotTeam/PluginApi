@@ -15,8 +15,8 @@ import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Moves byte payloads of [THRESHOLD_BYTES] or more into read-only shared memory, sent via [publish]
- * ahead of the frame. Binder transactions share a ~1MB per-process buffer, so large inline payloads
- * fail with TransactionTooLargeException.
+ * ahead of the frame. Binder transactions share a ~1MB per-process buffer (half of it for one-way
+ * calls), so large inline payloads fail with TransactionTooLargeException.
  */
 class SharedBytes(
     private val publish: (transferId: Long, region: SharedMemory) -> Unit,
@@ -24,8 +24,11 @@ class SharedBytes(
     private val received = ConcurrentHashMap<Long, SharedMemory>()
     private val transferIds = AtomicLong()
 
-    override fun offload(bytes: ByteArray): Long? {
-        if (bytes.size < THRESHOLD_BYTES) return null
+    override fun offload(bytes: ByteArray): Long? = if (bytes.size < THRESHOLD_BYTES) null else share(bytes)
+
+    override fun offloadFrame(frame: ByteArray): Long? = share(frame)
+
+    private fun share(bytes: ByteArray): Long? {
         var region: SharedMemory? = null
         return try {
             region = SharedMemory.create("msgbot-bytes", bytes.size)
@@ -84,7 +87,7 @@ class SharedBytes(
     }
 
     private companion object {
-        const val THRESHOLD_BYTES = 64 * 1024
+        const val THRESHOLD_BYTES = 16 * 1024
         const val MAX_OUTSTANDING = 64
         const val TAG = "SharedBytes"
     }

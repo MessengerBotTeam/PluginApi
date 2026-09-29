@@ -190,7 +190,11 @@ class RpcPeer(
         }
     }
 
-    /** Frames over [INLINE_FRAME_BYTES] go out of band, since many small values can still exceed a Binder transaction. */
+    /**
+     * Frames over [INLINE_FRAME_BYTES] go out of band. Binder shares one small buffer among every
+     * one-way call in flight to a process, so a burst of inline frames can be refused even when
+     * each fits; a refused frame is sent again out of band, after a short wait if even that fails.
+     */
     private inline fun send(
         frame: Value,
         onFailure: (String) -> Unit,
@@ -198,16 +202,34 @@ class RpcPeer(
         try {
             val encoded = ValueCodec.encode(frame, transport.bytes)
             require(encoded.size <= ValueCodec.MAX_SHARED_BYTES) { "a frame of ${encoded.size} bytes is more than the other side reads" }
-            val outOfBand = if (encoded.size > INLINE_FRAME_BYTES) transport.bytes.offload(encoded) else null
-            transport.send(
-                if (outOfBand == null) {
-                    encoded
-                } else {
-                    ValueCodec.encode(frame(SHARED, ID to Value.VInt(outOfBand), LENGTH to Value.VInt(encoded.size.toLong())))
-                },
-            )
+            if (encoded.size <= INLINE_FRAME_BYTES) {
+                try {
+                    transport.send(encoded)
+                    return
+                } catch (e: Exception) {
+                    if (!sendOutOfBand(encoded)) throw e
+                    return
+                }
+            }
+            if (!sendOutOfBand(encoded)) transport.send(encoded)
         } catch (e: Exception) {
             onFailure(describe(e))
+        }
+    }
+
+    /** False when the transport has no out-of-band channel. */
+    private fun sendOutOfBand(encoded: ByteArray): Boolean {
+        val id = transport.bytes.offloadFrame(encoded) ?: return false
+        val pointer = ValueCodec.encode(frame(SHARED, ID to Value.VInt(id), LENGTH to Value.VInt(encoded.size.toLong())))
+        var attempt = 0
+        while (true) {
+            try {
+                transport.send(pointer)
+                return true
+            } catch (e: Exception) {
+                if (++attempt > RETRY_DELAYS_MS.size || closed.get()) throw e
+                Thread.sleep(RETRY_DELAYS_MS[attempt - 1])
+            }
         }
     }
 
@@ -244,7 +266,9 @@ class RpcPeer(
         /** Out-of-band frame pointer: [ID] names the transfer, [LENGTH] its size. */
         const val SHARED = 4L
 
-        const val INLINE_FRAME_BYTES = 64 * 1024
+        const val INLINE_FRAME_BYTES = 16 * 1024
+
+        val RETRY_DELAYS_MS = longArrayOf(10, 50, 200)
 
         val TIMER =
             ScheduledThreadPoolExecutor(1) { r -> Thread(r, "plugin-rpc-timeouts").apply { isDaemon = true } }

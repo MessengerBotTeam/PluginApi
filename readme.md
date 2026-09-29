@@ -8,7 +8,7 @@ MessengerBotR의 플러그인 계약이다. 현재 개발 버전은 `0.1.0-SNAPS
 |---|---|
 | `contract` | 값, API 스키마, 표준 모듈, 엔진·제공자 SPI, 대칭 RPC. Android에 의존하지 않는다. |
 | `android` | `PluginService`, Binder 세션, 공유 메모리 전송 |
-| `tck` | 어떤 언어의 엔진이든 호스트 없이 돌려 보는 `EngineHarness`, JavaScript 엔진의 적합성 테스트(`JavaScriptEngineConformance`) |
+| `tck` | 엔진과 제공자를 호스트 없이 돌려 보는 `EngineHarness`, `ProviderHarness`. JavaScript 엔진의 적합성 테스트(`JavaScriptEngineConformance`)와 제공자의 적합성 테스트(`ProviderConformance`) |
 
 ## 구조
 
@@ -31,7 +31,7 @@ MessengerBotR의 플러그인 계약이다. 현재 개발 버전은 `0.1.0-SNAPS
 - **호스트는 언어를 모른다.** 스크립트가 API를 보는 방식(값 변환, 오류, 비동기, 모듈 로딩)은 언어마다 바인딩이 정한다. JavaScript는 앱이 직접 실행하는 언어라서 바인딩이 계약에 들어 있다([명세](docs/bindings/javascript.md), 공유 로더와 키트, TCK). 다른 언어는 그 언어를 추가하는 플러그인이 정한다([새 언어 추가](docs/bindings/README.md)).
 - **JavaScript 프로필 키트.** `require('msgbot')`가 모듈 생성, 인자 이름 붙이기, 이벤트 구독(`sys.listen`), 오류 보고를 대신한다. 그래서 다른 개발자가 새 JavaScript API를 만들 때도 자기 API의 모양만 쓰면 된다. 모든 JavaScript 엔진이 키트를 제공한다.
 - **RPC는 하나다.** 엔진과 제공자는 같은 양방향 채널(`RpcPeer`) 위의 역할이다. 원격 엔진과 원격 제공자도 로컬 구현과 같은 인터페이스를 구현한다.
-- **플러그인이 보낸 프레임은 믿지 않는다.** `ValueCodec`는 모든 길이와 중첩 깊이, 한 프레임이 만들 수 있는 값의 개수와 공유 메모리 크기를 검사한다. 타입 문자열도 길이와 깊이를 제한한다. 64KB가 넘는 바이트는 공유 메모리로 옮긴다.
+- **플러그인이 보낸 프레임은 믿지 않는다.** `ValueCodec`는 모든 길이와 중첩 깊이, 한 프레임이 만들 수 있는 값의 개수와 공유 메모리 크기를 검사한다. 타입 문자열도 길이와 깊이를 제한한다. 16KB가 넘는 바이트와 프레임은 공유 메모리로 옮기고, Binder가 받지 못한 프레임도 공유 메모리로 다시 보낸다. 그래서 긴 메시지도 프레임당 64MB까지 전달된다.
 - **무엇도 조용히 사라지지 않는다.** 핸들러가 `Error`를 던져도, 답을 보낼 수 없어도 요청한 쪽은 곧바로 오류로 답을 받는다. 엔진 스레드는 받지 못한 작업을 예외로 알리고(`EngineThread`), 끝나지 않는 스크립트는 `ScriptEngine.interrupt()`로 멈춘다.
 
 ## 플러그인 만들기
@@ -60,12 +60,15 @@ class KakaoDirect : Provider {
         provide("kakao") {
             function("members", returns = Type.list(Type.STRING)) {
                 param("channelId", Type.STRING)
-                handle { call -> membersOf(call.args.string("channelId")) }
+                // 네트워크나 DB를 기다리는 함수는 handleAsync로 제공자 스레드를 비워 둔다.
+                handleAsync { call -> membersOf(call.args.string("channelId")) }   // CompletionStage
             }
         },
     )
 }
 ```
+
+`handle`은 제공자 스레드에서 바로 값을 돌려준다. `handleAsync`는 `CompletionStage`를 돌려주고, 답은 어느 스레드에서 완성해도 된다. 그동안 제공자 스레드는 다른 호출을 받는다. 제공자는 테스트에서 `ProviderConformance`를 상속해 호스트가 보는 방식 그대로 검사할 수 있다.
 
 자세한 작성 안내는 MessengerBotR의 `docs/plugin-authoring.md`에 있다.
 

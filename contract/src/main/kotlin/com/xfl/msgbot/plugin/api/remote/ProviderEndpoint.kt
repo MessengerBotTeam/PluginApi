@@ -13,13 +13,15 @@ import com.xfl.msgbot.plugin.api.provider.ProviderCall
 import com.xfl.msgbot.plugin.api.provider.ProviderContext
 import com.xfl.msgbot.plugin.api.provider.ProviderModule
 import com.xfl.msgbot.plugin.api.provider.modulesByNamespace
-import com.xfl.msgbot.plugin.api.schema.Names
 import com.xfl.msgbot.plugin.api.remote.Wire.map
 import com.xfl.msgbot.plugin.api.remote.Wire.string
+import com.xfl.msgbot.plugin.api.remote.Wire.unwrapped
 import com.xfl.msgbot.plugin.api.rpc.PluginTransport
 import com.xfl.msgbot.plugin.api.rpc.RpcHandler
 import com.xfl.msgbot.plugin.api.rpc.RpcPeer
+import com.xfl.msgbot.plugin.api.schema.Names
 import com.xfl.msgbot.plugin.api.value.Value
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicBoolean
@@ -104,7 +106,7 @@ class ProviderEndpoint(
                             } catch (e: Exception) {
                                 return reply(CallResult.badArgs("Malformed call: ${e.message}"))
                             }
-                        onProvider(reply) { module.call(call) }
+                        onProviderAsync(reply) { module.callAsync(call) }
                     }
                     else -> reply(CallResult.failed("A provider does not answer '$method'"))
                 }
@@ -151,21 +153,26 @@ class ProviderEndpoint(
     private fun onProvider(
         reply: (CallResult) -> Unit,
         block: (Provider) -> Value,
+    ) = onProviderAsync(reply) { provider -> CompletableFuture.completedFuture(block(provider)) }
+
+    /** Starts [block] on the provider's thread and answers when its stage completes, from whichever thread that is. */
+    private fun onProviderAsync(
+        reply: (CallResult) -> Unit,
+        block: (Provider) -> CompletableFuture<Value>,
     ) {
         try {
             thread.execute {
-                val result =
-                    if (closed.get()) {
-                        CallResult.unavailable("The provider session is closed")
-                    } else {
-                        try {
-                            val provider = provider ?: throw IllegalStateException(startupFailure ?: "The provider is not running")
-                            CallResult.ok(block(provider))
-                        } catch (e: Throwable) {
-                            Wire.errorOf(e)
-                        }
+                if (closed.get()) return@execute reply(CallResult.unavailable("The provider session is closed"))
+                val answer =
+                    try {
+                        val provider = provider ?: throw IllegalStateException(startupFailure ?: "The provider is not running")
+                        block(provider)
+                    } catch (e: Throwable) {
+                        return@execute reply(Wire.errorOf(e))
                     }
-                reply(result)
+                answer.whenComplete { value, error ->
+                    reply(if (error == null) CallResult.ok(value) else Wire.errorOf(error.unwrapped()))
+                }
             }
         } catch (_: RejectedExecutionException) {
             reply(CallResult.unavailable("The provider session is closed"))
