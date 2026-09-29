@@ -32,6 +32,9 @@ internal object Wire {
     const val ENGINE_DISPATCH = "engine.dispatch"
     const val ENGINE_EVAL = "engine.eval"
 
+    /** A notification, so it overtakes the requests queued behind the script it stops. */
+    const val ENGINE_INTERRUPT = "engine.interrupt"
+
     // Engine role: plugin -> host.
     const val HOST_CALL = "host.call"
     const val ENGINE_ERROR = "engine.error"
@@ -49,14 +52,34 @@ internal object Wire {
 
     fun obj(vararg fields: Pair<String, Any?>): Value.VObject = Value.VObject(fields.associate { (k, v) -> k to Value.of(v) })
 
-    fun hello(modules: List<ModuleSpec> = emptyList()): Value = obj("protocol" to ProtocolVersion.CURRENT, "modules" to modules.map { it.toValue() })
+    /** What the host opens a session with: the protocol range it speaks. */
+    fun hello(): Value = obj("protocol" to ProtocolVersion.CURRENT, "minProtocol" to ProtocolVersion.MIN_SUPPORTED)
 
-    /** The protocol a hello answer names; refuses one this side cannot speak. */
+    /**
+     * The plugin's answer to the host's [hello]: the newest protocol both speak and, for a
+     * provider, its [modules]. Unavailable when the ranges do not meet.
+     */
+    fun answerHello(
+        params: Value,
+        modules: () -> List<ModuleSpec> = { emptyList() },
+    ): CallResult {
+        val offer = params.asObjectOrNull().orEmpty()
+        val hostMax = offer["protocol"]?.asLongOrNull()?.toInt() ?: return CallResult.badArgs("The host named no protocol")
+        val hostMin = offer["minProtocol"]?.asLongOrNull()?.toInt() ?: hostMax
+        val agreed =
+            ProtocolVersion.negotiate(hostMin, hostMax)
+                ?: return CallResult.unavailable(
+                    "This plugin speaks protocol ${ProtocolVersion.MIN_SUPPORTED}..${ProtocolVersion.CURRENT}; the host speaks $hostMin..$hostMax",
+                )
+        return CallResult.ok(obj("protocol" to agreed, "modules" to modules().map { it.toValue() }))
+    }
+
+    /** The plugin's answer to [hello], once checked to name a protocol this side speaks. */
     fun checkHello(answer: CallResult): Map<String, Value> {
         val map = answer.getOrThrow().asObjectOrNull() ?: throw IllegalStateException("The plugin answered hello with nothing")
-        val protocol = map["protocol"]?.asLongOrNull()?.toInt() ?: 0
-        check(ProtocolVersion.isCompatible(protocol)) {
-            "The plugin speaks protocol $protocol; this side speaks ${ProtocolVersion.MIN_SUPPORTED}..${ProtocolVersion.CURRENT}"
+        val protocol = map["protocol"]?.asLongOrNull()?.toInt() ?: throw IllegalStateException("The plugin named no protocol")
+        check(protocol in ProtocolVersion.MIN_SUPPORTED..ProtocolVersion.CURRENT) {
+            "The plugin chose protocol $protocol; this side speaks ${ProtocolVersion.MIN_SUPPORTED}..${ProtocolVersion.CURRENT}"
         }
         return map
     }
@@ -105,6 +128,8 @@ internal object Wire {
     fun errorOf(e: Throwable): CallResult =
         when (e) {
             is CallException -> CallResult.Err(e.code, e.message ?: e.code)
+            is StackOverflowError -> CallResult.failed("Stack overflow: the script recursed too deeply")
+            is OutOfMemoryError -> CallResult.failed("Out of memory: ${e.message ?: "the script used more than there is"}")
             else -> CallResult.failed(e.message ?: e.javaClass.simpleName)
         }
 }

@@ -21,6 +21,7 @@ import com.xfl.msgbot.plugin.api.rpc.RpcHandler
 import com.xfl.msgbot.plugin.api.rpc.RpcPeer
 import com.xfl.msgbot.plugin.api.value.Value
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.Semaphore
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -80,7 +81,7 @@ class EngineEndpoint(
                 reply: (CallResult) -> Unit,
             ) {
                 when (method) {
-                    Wire.HELLO -> reply(CallResult.ok(Wire.hello()))
+                    Wire.HELLO -> reply(Wire.answerHello(params))
                     Wire.ENGINE_LOAD -> {
                         val request =
                             try {
@@ -122,7 +123,10 @@ class EngineEndpoint(
                 method: String,
                 params: Value,
             ) {
-                if (method == Wire.CLOSE) close()
+                when (method) {
+                    Wire.CLOSE -> close()
+                    Wire.ENGINE_INTERRUPT -> interrupt()
+                }
             }
         }
 
@@ -136,7 +140,7 @@ class EngineEndpoint(
             constructed.await()
             try {
                 engine = factory.create(context)
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 val message = "The engine could not start: ${e.message ?: e.javaClass.simpleName}"
                 startupFailure = message
                 context.reportError(message, e)
@@ -150,7 +154,11 @@ class EngineEndpoint(
         constructed.countDown()
     }
 
-    /** Runs [block] on the engine thread and answers with what it returned or threw. */
+    /**
+     * Runs [block] on the engine thread and answers with what it returned or threw, whatever that
+     * is: an engine's [Error] (a stack overflow in the script) still gets its answer, so the host
+     * never waits for a timeout and an event's queue slot always comes back.
+     */
     private fun onEngine(
         reply: (CallResult) -> Unit,
         block: (ScriptEngine) -> Value,
@@ -164,20 +172,39 @@ class EngineEndpoint(
                         try {
                             val engine = engine ?: throw EngineException(startupFailure ?: "The engine is not running")
                             CallResult.ok(block(engine))
-                        } catch (e: Exception) {
+                        } catch (e: Throwable) {
                             Wire.errorOf(e)
                         }
                     }
                 reply(result)
             }
-        if (thread.isShutdown) reply(CallResult.unavailable("The engine session is closed")) else thread.execute(task)
+        try {
+            thread.execute(task)
+        } catch (_: RejectedExecutionException) {
+            reply(CallResult.unavailable("The engine session is closed"))
+        }
     }
 
-    /** The host dying never says goodbye, so the service closes this too; closing twice is normal. */
+    private fun interrupt() {
+        try {
+            engine?.interrupt()
+        } catch (e: Throwable) {
+            context.reportError("Interrupting the engine failed: ${e.message ?: e.javaClass.simpleName}", e)
+        }
+    }
+
+    /**
+     * The host dying never says goodbye, so the service closes this too; closing twice is normal.
+     * A script still running is interrupted first, or the close would queue behind it forever.
+     */
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         peer.close()
-        thread.execute { runCatching { engine?.close() } }
+        interrupt()
+        try {
+            thread.execute { runCatching { engine?.close() } }
+        } catch (_: RejectedExecutionException) {
+        }
         thread.shutdown()
     }
 }

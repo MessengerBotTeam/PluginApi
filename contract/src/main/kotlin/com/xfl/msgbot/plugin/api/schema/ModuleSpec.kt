@@ -130,11 +130,17 @@ data class ModuleSpec(
      * edition is simply absent from the script's `__api`. It is refused only when it cannot work
      * with this edition: another version, a changed type, or a required parameter or field that
      * one side lacks.
+     *
+     * Every member it keeps has this edition's signature, all of its optional parameters included,
+     * so a script passes the same arguments, by name or by position, whichever provider answers.
+     * [Fit.Accepted.accepts] says which of them the provider understands; the rest are dropped on
+     * the way to it, as a standard promises ("each provider takes what it understands").
      */
     fun fit(part: ModuleSpec): Fit {
         if (part.namespace != namespace) return Fit.Refused("it implements '${part.namespace}', not '$namespace'")
         if (part.version != version) return Fit.Refused("it implements $namespace v${part.version}, the standard is v$version")
         val ignored = mutableListOf<String>()
+        val accepts = linkedMapOf<String, Set<String>>()
         val functions =
             part.functions.mapNotNull { declared ->
                 val member = qualified(declared.name)
@@ -143,18 +149,18 @@ data class ModuleSpec(
                 fieldsProblem(member, "parameter", declared.params, standard.params)?.let { return Fit.Refused(it) }
                 val names = declared.params.map { it.name }.toSet()
                 names.filter { standard.params.none { p -> p.name == it } }.forEach { ignored += "$member($it)" }
-                standard.copy(params = standard.params.filter { it.name in names })
+                accepts[declared.name] = standard.params.map { it.name }.filterTo(linkedSetOf()) { it in names }
+                standard
             }
         val events =
             part.events.mapNotNull { declared ->
                 val member = qualified(declared.name)
                 val standard = event(declared.name) ?: return@mapNotNull null.also { ignored += member }
                 fieldsProblem(member, "field", declared.fields, standard.fields)?.let { return Fit.Refused(it) }
-                val names = declared.fields.map { it.name }.toSet()
-                names.filter { standard.fields.none { f -> f.name == it } }.forEach { ignored += "$member.$it" }
-                standard.copy(fields = standard.fields.filter { it.name in names })
+                declared.fields.filter { standard.fields.none { f -> f.name == it.name } }.forEach { ignored += "$member.${it.name}" }
+                standard
             }
-        return Fit.Accepted(copy(functions = functions, events = events), ignored)
+        return Fit.Accepted(copy(functions = functions, events = events), ignored, accepts)
     }
 
     fun toValue(): Value.VObject =
@@ -181,30 +187,64 @@ data class ModuleSpec(
                 ),
         )
 
+    /** What [ModuleSpec.read] made of a spec: [spec], and the members it had to leave out, with why. */
+    data class Read(val spec: ModuleSpec, val skipped: List<String>)
+
     companion object {
-        /** Reads what [toValue] wrote. Throws [IllegalArgumentException] for anything malformed. */
-        fun fromValue(value: Value): ModuleSpec {
+        /** Reads what [toValue] wrote, leaving out members it cannot read ([read]). */
+        fun fromValue(value: Value): ModuleSpec = read(value).spec
+
+        /**
+         * Reads what [toValue] wrote, one member at a time: a function or an event this side cannot
+         * read, such as one using a type a later contract added, is left out and named in
+         * [Read.skipped] instead of failing the whole module. Throws [IllegalArgumentException] only
+         * when the module itself is unreadable.
+         */
+        fun read(value: Value): Read {
             val map = value.asObjectOrNull() ?: throw IllegalArgumentException("A module spec is a map")
-            return ModuleSpec(
-                namespace = map.string("namespace"),
-                version = (map["version"]?.asLongOrNull() ?: 1L).toInt(),
-                functions =
-                    map.list("functions").map { f ->
-                        val fm = f.asObjectOrNull() ?: throw IllegalArgumentException("A function spec is a map")
-                        FunctionSpec(
-                            name = fm.string("name"),
-                            params = fieldsOf(fm["params"]),
-                            returns = Type.parse(fm["returns"]?.asStringOrNull() ?: "void"),
-                            doc = fm["doc"]?.asStringOrNull().orEmpty(),
-                        )
-                    },
-                events =
-                    map.list("events").map { e ->
-                        val em = e.asObjectOrNull() ?: throw IllegalArgumentException("An event spec is a map")
-                        EventSpec(em.string("name"), fieldsOf(em["fields"]), em["doc"]?.asStringOrNull().orEmpty())
-                    },
-                doc = map["doc"]?.asStringOrNull().orEmpty(),
-            )
+            val namespace = map.string("namespace")
+            val skipped = mutableListOf<String>()
+
+            fun <T> members(
+                key: String,
+                name: (T) -> String,
+                parse: (Map<String, Value>) -> T,
+            ): List<T> {
+                val seen = mutableSetOf<String>()
+                return map.list(key).mapIndexedNotNull { i, item ->
+                    val fields = item.asObjectOrNull()
+                    val label = "$namespace.${fields?.get("name")?.asStringOrNull() ?: "$key[$i]"}"
+                    try {
+                        parse(fields ?: throw IllegalArgumentException("not a map")).takeIf { seen.add(name(it)) }
+                            ?: null.also { skipped += "$label: declared twice" }
+                    } catch (e: IllegalArgumentException) {
+                        skipped += "$label: ${e.message}"
+                        null
+                    }
+                }
+            }
+            val functions =
+                members("functions", FunctionSpec::name) { fm ->
+                    FunctionSpec(
+                        name = fm.string("name"),
+                        params = fieldsOf(fm["params"]),
+                        returns = Type.parse(fm["returns"]?.asStringOrNull() ?: "void"),
+                        doc = fm["doc"]?.asStringOrNull().orEmpty(),
+                    )
+                }
+            val events =
+                members("events", EventSpec::name) { em ->
+                    EventSpec(em.string("name"), fieldsOf(em["fields"]), em["doc"]?.asStringOrNull().orEmpty())
+                }
+            val spec =
+                ModuleSpec(
+                    namespace = namespace,
+                    version = (map["version"]?.asLongOrNull() ?: 1L).toInt(),
+                    functions = functions,
+                    events = events,
+                    doc = map["doc"]?.asStringOrNull().orEmpty(),
+                )
+            return Read(spec, skipped)
         }
 
         private fun obj(vararg pairs: Pair<String, Value>) = Value.VObject(linkedMapOf(*pairs))
@@ -229,8 +269,15 @@ data class ModuleSpec(
 
 /** What a host makes of a provider's implementation of part of a standard ([ModuleSpec.fit]). */
 sealed interface Fit {
-    /** [spec] is the part in the host's terms; [ignored] names what the provider offers beyond them. */
-    data class Accepted(val spec: ModuleSpec, val ignored: List<String>) : Fit
+    /**
+     * [spec] is the part in the host's terms; [ignored] names what the provider offers beyond them;
+     * [accepts] names, per function, the parameters the provider understands.
+     */
+    data class Accepted(
+        val spec: ModuleSpec,
+        val ignored: List<String>,
+        val accepts: Map<String, Set<String>> = spec.functions.associate { f -> f.name to f.params.map { it.name }.toSet() },
+    ) : Fit
 
     data class Refused(val reason: String) : Fit
 }

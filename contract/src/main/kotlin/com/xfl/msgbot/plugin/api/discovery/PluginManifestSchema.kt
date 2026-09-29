@@ -21,7 +21,7 @@ package com.xfl.msgbot.plugin.api.discovery
  * messenger's database directly:
  *
  * ```xml
- * <msgbot-plugin protocol="4">
+ * <msgbot-plugin protocol="0">
  *     <engine id="luaj">
  *         <language name="lua" label="@string/lua" extension="lua" editorScope="source.lua" />
  *         <option key="strictGlobals" type="boolean" label="@string/strict" default="false" />
@@ -52,7 +52,11 @@ object PluginManifestSchema {
     const val TAG_PROVIDER = "provider"
     const val TAG_OPTION = "option"
 
-    /** On the root: the protocol the plugin speaks, checked before binding. */
+    /**
+     * On the root: the newest protocol the plugin speaks, its PluginApi's
+     * [com.xfl.msgbot.plugin.api.protocol.ProtocolVersion.CURRENT]. The host skips a plugin too
+     * old for it; which version a session speaks is agreed when it opens.
+     */
     const val ATTR_PROTOCOL = "protocol"
 
     /** Every component: its ID, unique per kind within the APK. */

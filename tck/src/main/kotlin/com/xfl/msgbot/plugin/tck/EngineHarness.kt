@@ -84,21 +84,18 @@ class EngineHarness(factory: ScriptEngineFactory) : AutoCloseable {
     fun eval(source: String): Value = onEngine { engine.eval(source) }
 
     /** Runs [block] on the engine thread and waits for it, rethrowing what it threw. */
-    fun <T> onEngine(block: () -> T): T {
-        val answer = CompletableFuture<T>()
-        thread.execute {
-            try {
-                answer.complete(block())
-            } catch (e: Throwable) {
-                answer.completeExceptionally(e)
-            }
-        }
-        return try {
-            answer.get(30, TimeUnit.SECONDS)
+    fun <T> onEngine(block: () -> T): T =
+        try {
+            onEngineAsync(block).get(30, TimeUnit.SECONDS)
         } catch (e: ExecutionException) {
             throw e.cause ?: e
         }
-    }
+
+    /** Runs [block] on the engine thread without waiting, for a test that stops it from outside. */
+    fun <T> onEngineAsync(block: () -> T): CompletableFuture<T> = thread.submit(block)
+
+    /** What the host does to a script that overran its time: [ScriptEngine.interrupt], from this thread. */
+    fun interrupt() = engine.interrupt()
 
     /** Polls [condition] until it holds or [timeoutMs] passes; whether it held. */
     fun awaitUntil(

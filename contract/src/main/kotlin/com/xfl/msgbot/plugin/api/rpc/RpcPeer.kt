@@ -134,18 +134,22 @@ class RpcPeer(
         call.timeout?.cancel(false)
         try {
             call.onResult(result)
-        } catch (e: Exception) {
-            onProtocolError("Handling the answer to '${call.method}' failed: ${e.message ?: e.javaClass.simpleName}")
+        } catch (e: Throwable) {
+            onProtocolError("Handling the answer to '${call.method}' failed: ${describe(e)}")
         }
     }
 
+    /**
+     * Nothing a frame does may escape to the transport: on Binder that would take the whole process
+     * down, so even an [Error] from a handler ends here as an answer or a protocol error.
+     */
     private fun onFrame(bytes: ByteArray) {
         if (closed.get()) return
         val frame =
             try {
                 open(bytes)
-            } catch (e: Exception) {
-                onProtocolError("Dropped a malformed frame: ${e.message}")
+            } catch (e: Throwable) {
+                onProtocolError("Dropped a malformed frame: ${describe(e)}")
                 return
             }
         when (frame[KIND]?.asLongOrNull()) {
@@ -156,13 +160,18 @@ class RpcPeer(
                 val answered = AtomicBoolean(false)
                 val reply: (CallResult) -> Unit = { result ->
                     if (answered.compareAndSet(false, true) && !closed.get()) {
-                        send(frame(RESPONSE, ID to Value.VInt(id), *resultFields(result))) { onProtocolError("Could not answer '$method': $it") }
+                        send(frame(RESPONSE, ID to Value.VInt(id), *resultFields(result))) { problem ->
+                            // The answer itself could not travel (too deep, too large): say so, or the
+                            // other side waits for its timeout.
+                            val failure = CallResult.failed("The answer to '$method' could not be sent: $problem")
+                            send(frame(RESPONSE, ID to Value.VInt(id), *resultFields(failure))) { onProtocolError("Could not answer '$method': $it") }
+                        }
                     }
                 }
                 try {
                     handler.onRequest(method, frame[PARAMS] ?: Value.VNull, reply)
-                } catch (e: Exception) {
-                    reply(CallResult.failed(e.message ?: e.javaClass.simpleName))
+                } catch (e: Throwable) {
+                    reply(CallResult.failed(describe(e)))
                 }
             }
             RESPONSE -> {
@@ -177,8 +186,8 @@ class RpcPeer(
                 val method = frame[METHOD]?.asStringOrNull() ?: return onProtocolError("A notification without a method")
                 try {
                     handler.onNotify(method, frame[PARAMS] ?: Value.VNull)
-                } catch (e: Exception) {
-                    onProtocolError("Handling '$method' failed: ${e.message ?: e.javaClass.simpleName}")
+                } catch (e: Throwable) {
+                    onProtocolError("Handling '$method' failed: ${describe(e)}")
                 }
             }
             else -> onProtocolError("A frame of unknown kind")
@@ -196,6 +205,7 @@ class RpcPeer(
     ) {
         try {
             val encoded = ValueCodec.encode(frame, transport.bytes)
+            require(encoded.size <= ValueCodec.MAX_SHARED_BYTES) { "a frame of ${encoded.size} bytes is more than the other side reads" }
             val outOfBand = if (encoded.size > INLINE_FRAME_BYTES) transport.bytes.offload(encoded) else null
             transport.send(
                 if (outOfBand == null) {
@@ -205,7 +215,7 @@ class RpcPeer(
                 },
             )
         } catch (e: Exception) {
-            onFailure(e.message ?: e.javaClass.simpleName)
+            onFailure(describe(e))
         }
     }
 
@@ -245,6 +255,8 @@ class RpcPeer(
         val TIMER =
             ScheduledThreadPoolExecutor(1) { r -> Thread(r, "plugin-rpc-timeouts").apply { isDaemon = true } }
                 .apply { removeOnCancelPolicy = true }
+
+        fun describe(e: Throwable): String = e.message ?: e.javaClass.simpleName
 
         fun frame(
             kind: Long,

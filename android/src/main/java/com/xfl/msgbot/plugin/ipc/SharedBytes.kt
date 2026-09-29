@@ -73,10 +73,12 @@ class SharedBytes(
         transferId: Long,
         region: SharedMemory,
     ) {
-        if (received.size >= MAX_OUTSTANDING) {
-            Log.w(TAG, "Refusing shared region $transferId: $MAX_OUTSTANDING already wait for their frames")
-            region.close()
-            return
+        // A region whose frame was dropped is never claimed. Transfer IDs only grow, so the oldest
+        // waiting is the one most likely orphaned; it makes room rather than refusing new ones.
+        while (received.size >= MAX_OUTSTANDING) {
+            val oldest = received.keys.minOrNull() ?: break
+            Log.w(TAG, "Discarding shared region $oldest: $MAX_OUTSTANDING wait for their frames")
+            received.remove(oldest)?.let { runCatching { it.close() } }
         }
         received.put(transferId, region)?.close()
     }

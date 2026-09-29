@@ -6,8 +6,7 @@ import android.os.SharedMemory;
 
 // Host -> plugin. One service hosts any number of independent sessions, one per project and role.
 interface IPluginService {
-    int protocolVersion();
-
+    // Which protocol a session speaks is agreed in its first request, "hello".
     // role is PluginRole.ENGINE or PluginRole.PROVIDER; component is the manifest id.
     long open(String role, String component, IPluginCallback callback);
 

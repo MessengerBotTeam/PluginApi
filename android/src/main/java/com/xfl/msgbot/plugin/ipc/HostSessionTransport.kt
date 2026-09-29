@@ -41,7 +41,12 @@ class HostSessionTransport(private val service: IPluginService) : PluginTranspor
                         }
                         current
                     }
-                deliver(frame)
+                // A Binder stub that throws an Error takes the host process down with it.
+                try {
+                    deliver(frame)
+                } catch (e: Throwable) {
+                    Log.e(TAG, "A frame from the plugin could not be handled", e)
+                }
             }
 
             override fun onShared(
@@ -50,17 +55,15 @@ class HostSessionTransport(private val service: IPluginService) : PluginTranspor
             ) = shared.receive(transferId, region)
         }
 
-    /** Opens the session for [role] and [component]; returns the protocol the service speaks. */
+    /** Opens the session for [role] and [component]. The protocol is agreed in its first request. */
     fun open(
         role: String,
         component: String,
-    ): Int {
-        val protocol = service.protocolVersion()
+    ) {
         val id = service.open(role, component, callback)
         require(id > 0) { "The plugin returned an invalid session id: $id" }
         session = id
         if (closed.get()) runCatching { service.close(id) }
-        return protocol
     }
 
     override fun send(frame: ByteArray) = service.send(requireSession(), frame)

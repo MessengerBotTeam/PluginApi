@@ -7,11 +7,12 @@ package com.xfl.msgbot.plugin.ipc
 
 import android.app.Service
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.IBinder
 import android.os.SharedMemory
+import com.xfl.msgbot.plugin.api.discovery.PluginManifestSchema
 import com.xfl.msgbot.plugin.api.discovery.PluginRole
 import com.xfl.msgbot.plugin.api.engine.ScriptEngineFactory
-import com.xfl.msgbot.plugin.api.protocol.ProtocolVersion
 import com.xfl.msgbot.plugin.api.provider.Provider
 import com.xfl.msgbot.plugin.api.remote.EngineEndpoint
 import com.xfl.msgbot.plugin.api.remote.ProviderEndpoint
@@ -51,13 +52,16 @@ open class PluginService : Service() {
 
     private val binder =
         object : IPluginService.Stub() {
-            override fun protocolVersion(): Int = ProtocolVersion.CURRENT
-
             override fun open(
                 role: String,
                 component: String,
                 callback: IPluginCallback,
             ): Long {
+                // The manifest's android:permission already keeps other apps out; this holds even
+                // when a plugin forgets to declare it.
+                if (checkCallingOrSelfPermission(PluginManifestSchema.PERMISSION) != PackageManager.PERMISSION_GRANTED) {
+                    throw SecurityException("Only MessengerBotR may open plugin sessions")
+                }
                 val transport = PluginSessionTransport(callback)
                 val endpoint =
                     try {
@@ -68,7 +72,7 @@ open class PluginService : Service() {
                                 ProviderEndpoint(transport, providers[component] ?: throw IllegalArgumentException("This plugin has no provider '$component'"))
                             else -> throw IllegalArgumentException("Unknown role '$role'")
                         }
-                    } catch (e: Exception) {
+                    } catch (e: Throwable) {
                         transport.close()
                         throw e
                     }

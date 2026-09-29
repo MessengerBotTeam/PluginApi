@@ -44,14 +44,25 @@ class MalformedFrameException(message: String) : IllegalArgumentException(messag
 
 /**
  * The tagged binary form of [Value]. A frame comes from another app, so decoding trusts nothing:
- * every length is checked against what is actually left, and nesting is bounded, so a broken or
- * hostile plugin gets a [MalformedFrameException] instead of the host's memory or stack.
+ * every length is checked against what is actually left, nesting is bounded, and so is what one
+ * frame may make the reader allocate, so a broken or hostile plugin gets a
+ * [MalformedFrameException] instead of the host's memory or stack.
  */
 object ValueCodec {
-    const val MAX_DEPTH = 64
+    /** How deep a value may nest. Bindings refuse deeper ones where a script passes them. */
+    const val MAX_VALUE_DEPTH = 64
 
-    /** The most one out-of-band payload may claim. */
+    /** How deep a frame may nest: a value's [MAX_VALUE_DEPTH] levels and the few the frame wraps around it. */
+    const val MAX_DEPTH = MAX_VALUE_DEPTH + 8
+
+    /** The most one out-of-band payload, or all of a frame's together, may claim. */
     const val MAX_SHARED_BYTES = 64 * 1024 * 1024
+
+    /**
+     * The most values one frame may hold. Each takes a byte or more on the wire but several times
+     * that in memory, so a large frame of tiny values is refused here rather than by the heap.
+     */
+    const val MAX_VALUES = 1 shl 20
 
     private const val T_NULL = 0
     private const val T_FALSE = 1
@@ -80,7 +91,7 @@ object ValueCodec {
         val buffer = ByteBuffer.wrap(frame)
         val value =
             try {
-                read(buffer, bytes, 0)
+                read(buffer, bytes, 0, Budget())
             } catch (_: BufferUnderflowException) {
                 throw MalformedFrameException("Frame ended early")
             }
@@ -111,6 +122,7 @@ object ValueCodec {
                 writeBytes(out, value.value.toByteArray(Charsets.UTF_8))
             }
             is Value.VBytes -> {
+                require(value.value.size <= MAX_SHARED_BYTES) { "${value.value.size} bytes are more than one value may carry ($MAX_SHARED_BYTES)" }
                 val transfer = channel.offload(value.value)
                 if (transfer != null) {
                     out.writeByte(T_SHARED_BYTES)
@@ -137,12 +149,20 @@ object ValueCodec {
         }
     }
 
+    /** What one frame has made the reader allocate so far. */
+    private class Budget {
+        var values = 0
+        var sharedBytes = 0L
+    }
+
     private fun read(
         buffer: ByteBuffer,
         channel: BytesChannel,
         depth: Int,
+        budget: Budget,
     ): Value {
         if (depth > MAX_DEPTH) throw MalformedFrameException("Values nest deeper than $MAX_DEPTH")
+        if (++budget.values > MAX_VALUES) throw MalformedFrameException("A frame holds more than $MAX_VALUES values")
         return when (val tag = buffer.get().toInt()) {
             T_NULL -> Value.VNull
             T_FALSE -> Value.VBool(false)
@@ -154,18 +174,19 @@ object ValueCodec {
             T_SHARED_BYTES -> {
                 val transfer = buffer.long
                 val length = buffer.int
-                if (length !in 0..MAX_SHARED_BYTES) throw MalformedFrameException("Shared payload of $length bytes")
+                budget.sharedBytes += length
+                if (length < 0 || budget.sharedBytes > MAX_SHARED_BYTES) throw MalformedFrameException("Shared payloads of ${budget.sharedBytes} bytes")
                 Value.VBytes(channel.resolve(transfer, length))
             }
             T_ARRAY -> {
                 // Every item takes at least its tag byte, so a count beyond that is a lie.
-                val count = count(buffer, perItem = 1)
-                Value.VArray(List(count) { read(buffer, channel, depth + 1) })
+                val count = count(buffer, perItem = 1, budget)
+                Value.VArray(List(count) { read(buffer, channel, depth + 1, budget) })
             }
             T_OBJECT -> {
-                val count = count(buffer, perItem = 5)
+                val count = count(buffer, perItem = 5, budget)
                 val entries = LinkedHashMap<String, Value>(count)
-                repeat(count) { entries[String(readBytes(buffer), Charsets.UTF_8)] = read(buffer, channel, depth + 1) }
+                repeat(count) { entries[String(readBytes(buffer), Charsets.UTF_8)] = read(buffer, channel, depth + 1, budget) }
                 Value.VObject(entries)
             }
             else -> throw MalformedFrameException("Unknown value tag $tag")
@@ -175,9 +196,12 @@ object ValueCodec {
     private fun count(
         buffer: ByteBuffer,
         perItem: Int,
+        budget: Budget,
     ): Int {
         val count = buffer.int
         if (count < 0 || count > buffer.remaining() / perItem) throw MalformedFrameException("Collection of $count items in ${buffer.remaining()} bytes")
+        // Checked before the collection is allocated, not item by item as they are read.
+        if (count > MAX_VALUES - budget.values) throw MalformedFrameException("A frame holds more than $MAX_VALUES values")
         return count
     }
 

@@ -37,6 +37,17 @@ interface ScriptEngine : AutoCloseable {
     /** Evaluates [source] in the script's global scope. For tests and a REPL. */
     fun eval(source: String): Value
 
+    /**
+     * Stops the script running on the engine thread now, the one exception to that thread: it is
+     * called from another one, while [load], [dispatch] or [eval] may be busy with a script that
+     * never returns (`while (true) {}`). That call should throw soon after, with an
+     * [EngineException]; the engine stays usable. When nothing runs, it does nothing.
+     *
+     * The host calls it when a script overruns its time and before it closes an engine that is
+     * still busy. Without it such a script keeps a thread and a core until the process dies.
+     */
+    fun interrupt()
+
     override fun close()
 }
 

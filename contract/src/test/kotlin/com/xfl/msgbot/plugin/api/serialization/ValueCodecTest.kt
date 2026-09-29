@@ -8,6 +8,7 @@ import java.io.DataOutputStream
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 
 class ValueCodecTest {
     @Test
@@ -68,4 +69,41 @@ class ValueCodecTest {
     }
 
     private fun bytes(block: DataOutputStream.() -> Unit): ByteArray = ByteArrayOutputStream().also { DataOutputStream(it).use(block) }.toByteArray()
+
+    @Test
+    fun `a frame of many tiny values is refused before it is allocated`() {
+        val count = ValueCodec.MAX_VALUES + 1
+        val frame =
+            java.nio.ByteBuffer
+                .allocate(5 + count)
+                .put(7)
+                .putInt(count)
+                .array()
+        val e = assertFailsWith<MalformedFrameException> { ValueCodec.decode(frame) }
+        assertTrue(e.message!!.contains("values"), e.message)
+        val fits = vArray(*Array(1000) { null })
+        assertEquals(fits, ValueCodec.decode(ValueCodec.encode(fits)))
+    }
+
+    @Test
+    fun `out-of-band payloads share one budget per frame`() {
+        val channel =
+            object : BytesChannel {
+                override fun offload(bytes: ByteArray): Long? = null
+
+                override fun resolve(
+                    transferId: Long,
+                    length: Int,
+                ): ByteArray = ByteArray(0)
+            }
+        val half = ValueCodec.MAX_SHARED_BYTES / 2 + 1
+        val frame =
+            java.nio.ByteBuffer
+                .allocate(5 + 2 * 13)
+                .put(7)
+                .putInt(2)
+                .apply { repeat(2) { put(9).putLong(it.toLong()).putInt(half) } }
+                .array()
+        assertFailsWith<MalformedFrameException> { ValueCodec.decode(frame, channel) }
+    }
 }

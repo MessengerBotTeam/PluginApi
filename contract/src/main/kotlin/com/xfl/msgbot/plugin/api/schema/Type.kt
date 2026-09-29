@@ -234,10 +234,13 @@ internal fun conformFields(
     return entries.filterKeys { it in known }.mapValues { (name, v) -> known.getValue(name).type.conform(v) }
 }
 
+/** Reads a type's text form. It comes from other apps, so its length and nesting are bounded. */
 private class TypeParser(private val text: String) {
     private var pos = 0
+    private var depth = 0
 
     fun parseAll(): Type {
+        if (text.length > MAX_LENGTH) fail("longer than $MAX_LENGTH characters")
         val type = parseType()
         skipSpace()
         if (pos != text.length) fail("unexpected '${text[pos]}'")
@@ -245,6 +248,7 @@ private class TypeParser(private val text: String) {
     }
 
     private fun parseType(): Type {
+        if (++depth > MAX_DEPTH) fail("nested deeper than $MAX_DEPTH")
         skipSpace()
         val base =
             if (peek() == '{') {
@@ -257,6 +261,7 @@ private class TypeParser(private val text: String) {
                 }
             }
         skipSpace()
+        depth--
         return if (peek() == '?') {
             pos++
             Type.Nullable(base)
@@ -317,5 +322,10 @@ private class TypeParser(private val text: String) {
         while (pos < text.length && text[pos].isWhitespace()) pos++
     }
 
-    private fun fail(message: String): Nothing = throw IllegalArgumentException("Bad type '$text' at $pos: $message")
+    private fun fail(message: String): Nothing = throw IllegalArgumentException("Bad type '${text.take(80)}' at $pos: $message")
+
+    private companion object {
+        const val MAX_LENGTH = 4096
+        const val MAX_DEPTH = 32
+    }
 }

@@ -5,10 +5,12 @@
 
 package com.xfl.msgbot.plugin.api.provider
 
+import com.xfl.msgbot.plugin.api.call.Args
 import com.xfl.msgbot.plugin.api.call.CallException
 import com.xfl.msgbot.plugin.api.call.ErrorCode
 import com.xfl.msgbot.plugin.api.schema.EventSpec
 import com.xfl.msgbot.plugin.api.schema.FieldsBuilder
+import com.xfl.msgbot.plugin.api.schema.Fit
 import com.xfl.msgbot.plugin.api.schema.FunctionSpec
 import com.xfl.msgbot.plugin.api.schema.FunctionSpecBuilder
 import com.xfl.msgbot.plugin.api.schema.ModuleSpec
@@ -129,6 +131,19 @@ class ImplementationBuilder internal constructor(private val spec: ModuleSpec) {
         emitted += events
     }
 }
+
+/**
+ * This module as a host publishes it once [fit] accepted it: [Fit.Accepted.spec]'s signatures,
+ * each call trimmed to the parameters the provider understands and each answer to what this
+ * edition knows.
+ */
+fun ProviderModule.fittedTo(fit: Fit.Accepted): ProviderModule =
+    ProviderModule(fit.spec) { call ->
+        val understood = fit.accepts[call.function]
+        val args = if (understood == null) call.args else Args(call.args.values.filterKeys { it in understood })
+        val result = call(ProviderCall(call.projectId, call.function, args, call.options))
+        fit.spec.function(call.function)?.conformResult(result) ?: result
+    }
 
 /** This provider's modules by namespace. Throws when two claim the same one. */
 fun Provider.modulesByNamespace(): Map<String, ProviderModule> {

@@ -5,6 +5,7 @@
 
 package com.xfl.msgbot.plugin.ipc
 
+import android.os.DeadObjectException
 import android.os.RemoteException
 import android.os.SharedMemory
 import com.xfl.msgbot.plugin.api.rpc.PluginTransport
@@ -21,8 +22,11 @@ class PluginSessionTransport(private val callback: IPluginCallback) : PluginTran
     override fun send(frame: ByteArray) {
         try {
             callback.onFrame(frame)
-        } catch (_: RemoteException) {
+        } catch (_: DeadObjectException) {
             // The host is gone; its death closes this session.
+        } catch (e: RemoteException) {
+            // Alive but unable to take it (a full transaction buffer): the sender must hear of it.
+            throw IllegalStateException("The host could not take a frame: ${e.message ?: e.javaClass.simpleName}", e)
         }
     }
 

@@ -1,5 +1,9 @@
 package com.xfl.msgbot.plugin.api.schema
 
+import com.xfl.msgbot.plugin.api.call.Args
+import com.xfl.msgbot.plugin.api.provider.ProviderCall
+import com.xfl.msgbot.plugin.api.provider.fittedTo
+import com.xfl.msgbot.plugin.api.provider.implement
 import com.xfl.msgbot.plugin.api.standard.StandardApi
 import com.xfl.msgbot.plugin.api.value.Value
 import com.xfl.msgbot.plugin.api.value.vObject
@@ -92,8 +96,10 @@ class ModuleSpecTest {
                 }
             }
         val fit = assertIs<Fit.Accepted>(StandardApi.Bot.fit(older))
-        assertEquals(emptyList(), fit.ignored)
-        assertEquals(listOf("text", "room"), fit.spec.function("send")!!.params.map { it.name })
+        assertEquals(emptyList<String>(), fit.ignored)
+        // Scripts see this edition's signature whoever answers; the provider hears what it knows.
+        assertEquals(StandardApi.Bot.function("send"), fit.spec.function("send"))
+        assertEquals(setOf("text", "room"), fit.accepts["send"])
         assertIs<Fit.Refused>(StandardApi.Bot.fit(older.copy(version = 2)))
     }
 
@@ -126,7 +132,8 @@ class ModuleSpecTest {
         val fit = assertIs<Fit.Accepted>(StandardApi.Bot.fit(newer))
         assertEquals(listOf("bot.send(silent)", "bot.edit", "bot.message.thread"), fit.ignored)
         assertEquals(listOf("send"), fit.spec.functions.map { it.name })
-        assertEquals(listOf("text", "room"), fit.spec.function("send")!!.params.map { it.name })
+        assertEquals(StandardApi.Bot.function("send"), fit.spec.function("send"))
+        assertEquals(setOf("text", "room"), fit.accepts["send"])
 
         val message = fit.spec.event("message")!!
         val payload =
@@ -148,5 +155,41 @@ class ModuleSpecTest {
                 }
             }
         assertIs<Fit.Refused>(StandardApi.Bot.fit(requiresUnknown))
+    }
+
+    @Test
+    fun `a fitted module passes a provider only the arguments it understands`() {
+        val heard = mutableListOf<Map<String, Value>>()
+        val older =
+            implement(moduleSpec("bot") {
+                function("reply", returns = Type.BOOL) {
+                    param("text", Type.STRING)
+                    optional("room", Type.STRING)
+                }
+            }) {
+                handle("reply") { call ->
+                    heard += call.args.values
+                    true
+                }
+            }
+        val fit = assertIs<Fit.Accepted>(StandardApi.Bot.fit(older.spec))
+        val published = older.fittedTo(fit)
+        val args = mapOf("text" to Value.VString("hi"), "token" to Value.VString("t1"), "room" to Value.VString("r"))
+        assertNull(published.spec.function("reply")!!.checkArgs(args), "a script may pass the whole address")
+        assertEquals<Value>(Value.TRUE, published.call(ProviderCall("p", "reply", Args(args))))
+        assertEquals<List<Map<String, Value>>>(listOf(mapOf("text" to Value.VString("hi"), "room" to Value.VString("r"))), heard)
+    }
+
+    @Test
+    fun `a spec is read member by member, leaving out what this side cannot read`() {
+        val value = weather.toValue()
+        val functions = (value.entries.getValue("functions") as Value.VArray).items
+        val later = vObject("name" to "radar", "params" to emptyList<Any>(), "returns" to "tuple<int, int>")
+        val twice = functions.first()
+        val read = ModuleSpec.read(Value.VObject(value.entries + ("functions" to Value.VArray(functions + later + twice))))
+        assertEquals(weather, read.spec)
+        assertEquals(2, read.skipped.size, "${read.skipped}")
+        assertTrue(read.skipped.first().startsWith("weather.radar: "), read.skipped.first())
+        assertTrue(read.skipped.last().contains("declared twice"), read.skipped.last())
     }
 }

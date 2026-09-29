@@ -96,7 +96,13 @@ class RemoteProvider private constructor(
             val provider = RemoteProvider(transport, timeoutMs, onError)
             try {
                 val hello = Wire.checkHello(provider.peer.request(Wire.HELLO, Wire.hello(), Wire.HELLO_TIMEOUT_MS))
-                provider.specs = (hello["modules"]?.asArrayOrNull() ?: throw IllegalStateException("The provider did not describe its modules")).map(ModuleSpec::fromValue)
+                val described = hello["modules"]?.asArrayOrNull() ?: throw IllegalStateException("The provider did not describe its modules")
+                provider.specs =
+                    described.map { value ->
+                        ModuleSpec.read(value).also { read ->
+                            read.skipped.forEach { onError("Left out $it") }
+                        }.spec
+                    }
             } catch (e: Exception) {
                 provider.peer.close()
                 throw e
