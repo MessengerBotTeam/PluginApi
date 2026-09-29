@@ -29,20 +29,11 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * What every JavaScript engine must do, as tests. Extend it in the engine's own test sources:
- *
- * ```kotlin
- * class MyEngineConformanceTest : JavaScriptEngineConformance() {
- *     override fun createEngine(context: EngineContext) = MyEngine(context)
- * }
- * ```
- *
- * Passing it is what lets any JavaScript profile run on the engine unchanged: the same values,
- * errors, events, timers, promises and modules, whoever wrote the runtime underneath. The binding
- * it checks is written out in PluginApi's docs/bindings/javascript.md.
+ * Conformance tests for the JavaScript binding (docs/bindings/javascript.md). Subclass it in an
+ * engine's test sources and implement [createEngine].
  */
 abstract class JavaScriptEngineConformance {
-    /** The engine under test. Called on the engine thread. */
+    /** Called on the engine thread. */
     protected abstract fun createEngine(context: EngineContext): ScriptEngine
 
     protected lateinit var harness: EngineHarness
@@ -282,10 +273,6 @@ abstract class JavaScriptEngineConformance {
         assertEquals(listOf(Value.VArray(emptyList()), Value.VArray(listOf(Value.VString("tck.ping")))), listened)
     }
 
-    /**
-     * A profile shaped nothing like the app's own: one function per event, Promises throughout.
-     * That it runs on the kit alone is what lets anyone ship a new JavaScript API as a plugin.
-     */
     @Test
     fun aProfileOfAnyShapeRunsOnTheKitAlone() {
         load(

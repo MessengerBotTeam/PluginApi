@@ -12,9 +12,8 @@ import com.xfl.msgbot.plugin.api.serialization.BytesChannel
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * The host's end of one session with a bound plugin service. Frames can arrive before anyone
- * listens (a plugin answers as soon as the session opens), so they wait, boundedly, for
- * [setListener] instead of being lost.
+ * Host end of one plugin session. Frames arriving before [setListener] are buffered, up to
+ * [MAX_WAITING].
  */
 class HostSessionTransport(private val service: IPluginService) : PluginTransport {
     private val lock = Any()
@@ -41,7 +40,7 @@ class HostSessionTransport(private val service: IPluginService) : PluginTranspor
                         }
                         current
                     }
-                // A Binder stub that throws an Error takes the host process down with it.
+                // An Error escaping a Binder stub crashes the host process.
                 try {
                     deliver(frame)
                 } catch (e: Throwable) {
@@ -55,7 +54,7 @@ class HostSessionTransport(private val service: IPluginService) : PluginTranspor
             ) = shared.receive(transferId, region)
         }
 
-    /** Opens the session for [role] and [component]. The protocol is agreed in its first request. */
+    /** The protocol is negotiated in the first request, `hello`. */
     fun open(
         role: String,
         component: String,

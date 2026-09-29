@@ -94,7 +94,7 @@ class RpcPeerTest {
         assertEquals("hi" to Value.VString("there"), notes.get(5, TimeUnit.SECONDS))
     }
 
-    /** Like Binder: a transaction has a size limit, and a side channel carries what does not fit. */
+    /** Mimics Binder: a per-frame size limit plus a side channel for out-of-band data. */
     private class LimitedTransport(
         private val inner: PluginTransport,
         private val store: ConcurrentHashMap<Long, ByteArray>,
@@ -133,7 +133,7 @@ class RpcPeerTest {
         val asker = RpcPeer(limitedHost, echo)
         val answerer = RpcPeer(limitedPlugin, echo)
         try {
-            // A project's sources: no single file is large, together they are.
+            // Many small values that together exceed the limit.
             val sources = Value.VObject((1..400).associate { "file$it.js" to Value.VString("x".repeat(1_000)) })
             assertEquals(CallResult.ok(sources), asker.request("echo", sources, 5_000))
             assertEquals(CallResult.ok(Value.VString("y".repeat(300_000))), asker.request("echo", Value.VString("y".repeat(300_000)), 5_000))

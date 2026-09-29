@@ -26,10 +26,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
-/**
- * A remote engine behaves like a local one: same requests in, same host calls out. The engine is
- * a language the contract has never heard of, as a plugin's would be.
- */
 class EngineSessionTest {
     private val hostCalls = CopyOnWriteArrayList<Pair<String, Map<String, Value>>>()
     private val errors = CopyOnWriteArrayList<String>()
@@ -72,7 +68,7 @@ class EngineSessionTest {
             }
         }
 
-    /** Stands in for a plugin's language: understands a few commands in place of real source. */
+    /** Interprets a few fixed commands instead of real source. */
     private class FakeEngine(private val context: EngineContext) : ScriptEngine {
         var loaded: LoadRequest? = null
         val seen = CopyOnWriteArrayList<String>()
@@ -219,7 +215,7 @@ class EngineSessionTest {
     fun `a handler's Error fails the dispatch and gives its queue slot back`() {
         val engine = connect()
         engine.load(request)
-        // Twice the queue: a slot that did not come back would refuse the later ones.
+        // Twice the queue size, so a leaked slot would reject a later dispatch.
         repeat(4) {
             val e = assertFailsWith<EngineException> { engine.dispatch(ScriptEvent("test.overflow")) }
             assertTrue(e.message!!.contains("Stack overflow"), e.message)

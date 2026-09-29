@@ -11,23 +11,19 @@ import java.io.DataOutputStream
 import java.nio.BufferUnderflowException
 import java.nio.ByteBuffer
 
-/**
- * Where large byte payloads travel instead of the frame. A transport that can hand memory across
- * (shared memory over Binder) takes them out in [offload] and gives them back in [resolve]; the
- * frame keeps only an ID and a length.
- */
+/** Out-of-band channel for large byte payloads (e.g. shared memory). The frame keeps only an ID and length. */
 interface BytesChannel {
-    /** An ID when [bytes] now travel out of band; null keeps them in the frame. */
+    /** Returns a transfer ID, or null to keep [bytes] inline. */
     fun offload(bytes: ByteArray): Long?
 
-    /** The bytes sent out of band under [transferId]. Throws when they never arrived. */
+    /** Throws if [transferId] is unknown. */
     fun resolve(
         transferId: Long,
         length: Int,
     ): ByteArray
 
     companion object {
-        /** Everything stays in the frame; what an in-process transport wants. */
+        /** Keeps all bytes inline. */
         val INLINE: BytesChannel =
             object : BytesChannel {
                 override fun offload(bytes: ByteArray): Long? = null
@@ -43,25 +39,20 @@ interface BytesChannel {
 class MalformedFrameException(message: String) : IllegalArgumentException(message)
 
 /**
- * The tagged binary form of [Value]. A frame comes from another app, so decoding trusts nothing:
- * every length is checked against what is actually left, nesting is bounded, and so is what one
- * frame may make the reader allocate, so a broken or hostile plugin gets a
- * [MalformedFrameException] instead of the host's memory or stack.
+ * Tagged binary encoding of [Value]. Frames come from other apps, so decoding checks every length
+ * against the remaining input and bounds nesting and allocation, throwing [MalformedFrameException].
  */
 object ValueCodec {
-    /** How deep a value may nest. Bindings refuse deeper ones where a script passes them. */
+    /** Bindings reject deeper values at the script boundary. */
     const val MAX_VALUE_DEPTH = 64
 
-    /** How deep a frame may nest: a value's [MAX_VALUE_DEPTH] levels and the few the frame wraps around it. */
+    /** [MAX_VALUE_DEPTH] plus room for the frame envelope. */
     const val MAX_DEPTH = MAX_VALUE_DEPTH + 8
 
-    /** The most one out-of-band payload, or all of a frame's together, may claim. */
+    /** Limit for one out-of-band payload and for a frame's total. */
     const val MAX_SHARED_BYTES = 64 * 1024 * 1024
 
-    /**
-     * The most values one frame may hold. Each takes a byte or more on the wire but several times
-     * that in memory, so a large frame of tiny values is refused here rather than by the heap.
-     */
+    /** Values are much larger in memory than on the wire, so cap the count per frame. */
     const val MAX_VALUES = 1 shl 20
 
     private const val T_NULL = 0
@@ -149,7 +140,7 @@ object ValueCodec {
         }
     }
 
-    /** What one frame has made the reader allocate so far. */
+    /** Allocation so far for one frame. */
     private class Budget {
         var values = 0
         var sharedBytes = 0L
@@ -179,7 +170,7 @@ object ValueCodec {
                 Value.VBytes(channel.resolve(transfer, length))
             }
             T_ARRAY -> {
-                // Every item takes at least its tag byte, so a count beyond that is a lie.
+                // Each item needs at least a tag byte.
                 val count = count(buffer, perItem = 1, budget)
                 Value.VArray(List(count) { read(buffer, channel, depth + 1, budget) })
             }
@@ -200,7 +191,7 @@ object ValueCodec {
     ): Int {
         val count = buffer.int
         if (count < 0 || count > buffer.remaining() / perItem) throw MalformedFrameException("Collection of $count items in ${buffer.remaining()} bytes")
-        // Checked before the collection is allocated, not item by item as they are read.
+        // Check before allocating the collection.
         if (count > MAX_VALUES - budget.values) throw MalformedFrameException("A frame holds more than $MAX_VALUES values")
         return count
     }

@@ -18,10 +18,7 @@ import com.xfl.msgbot.plugin.api.value.asLongOrNull
 import com.xfl.msgbot.plugin.api.value.asObjectOrNull
 import com.xfl.msgbot.plugin.api.value.asStringOrNull
 
-/**
- * The methods each role speaks over [com.xfl.msgbot.plugin.api.rpc.RpcPeer], and how their
- * parameters are spelled. Both ends are in this package, so the spelling lives in one place.
- */
+/** RPC method names and parameter encoding shared by both ends. */
 internal object Wire {
     // Every role.
     const val HELLO = "hello"
@@ -32,7 +29,7 @@ internal object Wire {
     const val ENGINE_DISPATCH = "engine.dispatch"
     const val ENGINE_EVAL = "engine.eval"
 
-    /** A notification, so it overtakes the requests queued behind the script it stops. */
+    /** A notification, so it is not queued behind the busy request it stops. */
     const val ENGINE_INTERRUPT = "engine.interrupt"
 
     // Engine role: plugin -> host.
@@ -52,13 +49,10 @@ internal object Wire {
 
     fun obj(vararg fields: Pair<String, Any?>): Value.VObject = Value.VObject(fields.associate { (k, v) -> k to Value.of(v) })
 
-    /** What the host opens a session with: the protocol range it speaks. */
+    /** Host's opening request: its protocol range. */
     fun hello(): Value = obj("protocol" to ProtocolVersion.CURRENT, "minProtocol" to ProtocolVersion.MIN_SUPPORTED)
 
-    /**
-     * The plugin's answer to the host's [hello]: the newest protocol both speak and, for a
-     * provider, its [modules]. Unavailable when the ranges do not meet.
-     */
+    /** Plugin's reply to [hello]: agreed protocol and, for a provider, its [modules]. Unavailable if ranges do not overlap. */
     fun answerHello(
         params: Value,
         modules: () -> List<ModuleSpec> = { emptyList() },
@@ -74,7 +68,7 @@ internal object Wire {
         return CallResult.ok(obj("protocol" to agreed, "modules" to modules().map { it.toValue() }))
     }
 
-    /** The plugin's answer to [hello], once checked to name a protocol this side speaks. */
+    /** Validates the plugin's [hello] reply. */
     fun checkHello(answer: CallResult): Map<String, Value> {
         val map = answer.getOrThrow().asObjectOrNull() ?: throw IllegalStateException("The plugin answered hello with nothing")
         val protocol = map["protocol"]?.asLongOrNull()?.toInt() ?: throw IllegalStateException("The plugin named no protocol")
@@ -118,7 +112,6 @@ internal object Wire {
 
     fun Map<String, Value>.string(key: String): String = this[key]?.asStringOrNull() ?: throw IllegalArgumentException("'$key' is missing")
 
-    /** The value, or the failure as an [EngineException] a compile or dispatch can show. */
     fun CallResult.orEngineException(what: String): Value =
         when (this) {
             is CallResult.Ok -> value

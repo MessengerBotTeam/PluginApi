@@ -15,9 +15,8 @@ import com.xfl.msgbot.plugin.api.value.asObjectOrNull
 import com.xfl.msgbot.plugin.api.value.asStringOrNull
 
 /**
- * The named arguments of one call. By the time an implementation sees them the host has already
- * checked them against the function's schema, so the plain accessors are safe for required
- * parameters and the `OrNull` ones fit optional parameters.
+ * Named call arguments, already validated against the schema. Use plain accessors for required
+ * parameters and `OrNull` ones for optional parameters.
  */
 class Args(val values: Map<String, Value>) {
     operator fun get(name: String): Value = values[name] ?: Value.VNull

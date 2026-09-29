@@ -13,13 +13,10 @@ import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
 /**
- * The single thread an engine lives on, usable as its [EngineScheduler] and as a plain [Executor].
+ * An engine's single thread, usable as its [EngineScheduler] and as an [Executor].
  *
- * Nothing handed to it is lost without a word: [execute] after [shutdown] throws, as an
- * [Executor] must, so a coroutine dispatcher over it fails instead of waiting forever; [submit]
- * answers every task, failing the ones [shutdownNow] drops. [post] and [schedule], the
- * [EngineScheduler] an engine sees, simply stop once the thread does, so a closed engine never
- * hears from a timer again.
+ * After shutdown, [execute] throws (so a coroutine dispatcher fails instead of hanging), [submit]
+ * futures fail, and [post]/[schedule] silently drop the task.
  */
 class EngineThread(
     name: String,
@@ -32,7 +29,7 @@ class EngineThread(
             continueExistingPeriodicTasksAfterShutdownPolicy = false
         }
 
-    /** What [submit] promised and has not run yet; [shutdownNow] fails these. */
+    /** Unrun [submit] futures; [shutdownNow] fails them. */
     private val pending = ConcurrentHashMap.newKeySet<CompletableFuture<*>>()
 
     @Volatile private var thread: Thread? = null
@@ -49,9 +46,8 @@ class EngineThread(
     override fun execute(command: Runnable) = executor.execute(command)
 
     /**
-     * Runs [block] on this thread; the future answers with what it returned or threw. It fails with
-     * [RejectedExecutionException] when the thread is shut down before the block runs, and
-     * cancelling it before then skips the block.
+     * Runs [block] on this thread. The future fails with [RejectedExecutionException] if the thread
+     * shuts down first; cancelling it before it runs skips the block.
      */
     fun <T> submit(block: () -> T): CompletableFuture<T> {
         val result = CompletableFuture<T>()
@@ -78,7 +74,7 @@ class EngineThread(
         try {
             executor.execute { guarded("A posted task", task) }
         } catch (_: RejectedExecutionException) {
-            // Shut down; nothing left to run it against.
+            // Shut down; drop the task.
         }
     }
 
@@ -106,9 +102,8 @@ class EngineThread(
     fun shutdown() = executor.shutdown()
 
     /**
-     * Interrupts whatever is running, drops the queue, and fails what [submit] still owed. An
-     * engine stuck in a script does not notice a Java interrupt; stop it with
-     * [ScriptEngine.interrupt] first.
+     * Interrupts the running task, drops the queue, and fails pending [submit] futures. A script
+     * ignores Java interrupts; call [ScriptEngine.interrupt] first.
      */
     fun shutdownNow() {
         executor.shutdownNow()

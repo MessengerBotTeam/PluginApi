@@ -26,12 +26,10 @@ import java.util.concurrent.Semaphore
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * The plugin side of an engine session: runs the real [ScriptEngine] on its own [EngineThread]
- * and serves the host's requests. [com.xfl.msgbot.plugin.ipc.PluginService] makes one per session;
- * an engine author never touches it.
+ * Plugin side of an engine session: runs the [ScriptEngine] on an [EngineThread] and serves host
+ * requests. Created per session by [com.xfl.msgbot.plugin.ipc.PluginService].
  *
- * At most [maxPendingEvents] events (the running one included) wait for the engine; beyond that
- * the host is told the queue is full instead of the plugin running out of memory.
+ * Events beyond [maxPendingEvents] (including the running one) are rejected as unavailable.
  */
 class EngineEndpoint(
     transport: PluginTransport,
@@ -130,9 +128,8 @@ class EngineEndpoint(
             }
         }
 
-    // The engine is created by the first task on its thread, so any request that arrives once the
-    // peer listens is queued behind it. The latch keeps that task from reporting a failure through
-    // a peer that does not exist yet.
+    // Creating the engine as the first thread task queues every request behind it. The latch stops
+    // that task from reporting a failure before [peer] is assigned.
     private val constructed = CountDownLatch(1)
 
     init {
@@ -154,11 +151,7 @@ class EngineEndpoint(
         constructed.countDown()
     }
 
-    /**
-     * Runs [block] on the engine thread and answers with what it returned or threw, whatever that
-     * is: an engine's [Error] (a stack overflow in the script) still gets its answer, so the host
-     * never waits for a timeout and an event's queue slot always comes back.
-     */
+    /** Catches Throwable so errors like StackOverflowError still reply and release the event slot. */
     private fun onEngine(
         reply: (CallResult) -> Unit,
         block: (ScriptEngine) -> Value,
@@ -194,8 +187,8 @@ class EngineEndpoint(
     }
 
     /**
-     * The host dying never says goodbye, so the service closes this too; closing twice is normal.
-     * A script still running is interrupted first, or the close would queue behind it forever.
+     * Idempotent: both the host and the service may close it. Interrupts a running script first,
+     * or the close task would queue behind it.
      */
     override fun close() {
         if (!closed.compareAndSet(false, true)) return

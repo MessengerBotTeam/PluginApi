@@ -11,12 +11,9 @@ import com.xfl.msgbot.plugin.api.value.asLongOrNull
 import com.xfl.msgbot.plugin.api.value.asObjectOrNull
 import com.xfl.msgbot.plugin.api.value.asStringOrNull
 
-/** How names are spelled. Everything a script can call or hear is `namespace.member`. */
+/** Qualified names are `namespace.member`. */
 object Names {
-    /**
-     * One lowercase segment. With no dots inside a namespace, `weather` can never own anything
-     * `weatherradar` does, so ownership is decided by string equality alone.
-     */
+    /** One lowercase segment, so namespace ownership is plain string equality. */
     val NAMESPACE = Regex("[a-z][a-z0-9]*")
 
     val MEMBER = Regex("[A-Za-z][A-Za-z0-9_]*")
@@ -26,7 +23,7 @@ object Names {
         member: String,
     ): String = "$namespace.$member"
 
-    /** `bot.reply` -> (`bot`, `reply`); null for anything not spelled that way. */
+    /** `bot.reply` -> (`bot`, `reply`); null if malformed. */
     fun split(qualified: String): Pair<String, String>? {
         val dot = qualified.indexOf('.')
         if (dot < 0 || qualified.indexOf('.', dot + 1) >= 0) return null
@@ -36,7 +33,7 @@ object Names {
     }
 }
 
-/** A function a script can call: its parameters by name, and what it answers. */
+/** A function a script can call. */
 data class FunctionSpec(
     val name: String,
     val params: List<Field> = emptyList(),
@@ -49,16 +46,16 @@ data class FunctionSpec(
         require(duplicate.isEmpty()) { "Parameters declared twice in $name: $duplicate" }
     }
 
-    /** Why [args] cannot be passed to this function, or null when they can. */
+    /** Returns why [args] are invalid, or null. */
     fun checkArgs(args: Map<String, Value>): String? = Type.checkFields(params, args, "")
 
     fun checkResult(value: Value): String? = returns.check(value, "result")
 
-    /** [value] trimmed to [returns]: what a provider built against a newer standard added is dropped. */
+    /** Drops result fields [returns] does not declare. */
     fun conformResult(value: Value): Value = returns.conform(value)
 }
 
-/** Something a script can listen for. The payload is always a struct of [fields]. */
+/** An event a script can listen for. The payload is a struct of [fields]. */
 data class EventSpec(
     val name: String,
     val fields: List<Field> = emptyList(),
@@ -72,17 +69,15 @@ data class EventSpec(
 
     fun checkPayload(payload: Map<String, Value>): String? = Type.checkFields(fields, payload, "")
 
-    /** [payload] trimmed to [fields]: what a provider built against a newer standard added is dropped. */
+    /** Drops payload fields not in [fields]. */
     fun conform(payload: Map<String, Value>): Map<String, Value> = conformFields(fields, payload)
 }
 
 /**
- * The published face of one namespace: every function and event in it, with types. This is the
- * API standard. The host checks calls and events against it and engines hand it to profiles as
- * data, so no language has to re-read a comment to learn a signature.
+ * The typed functions and events of one namespace. The host validates calls and events against it;
+ * engines pass it to profiles as data.
  *
- * [version] rises when a signature changes incompatibly; adding a function or an optional
- * parameter does not need it.
+ * Bump [version] only for incompatible signature changes, not for added functions or optional parameters.
  */
 data class ModuleSpec(
     val namespace: String,
@@ -106,7 +101,7 @@ data class ModuleSpec(
 
     fun qualified(member: String): String = Names.qualify(namespace, member)
 
-    /** The same module offering only [functions] and [events]; what a partial implementation publishes. */
+    /** This module limited to [functions] and [events], for partial implementations. */
     fun restrictTo(
         functions: Collection<String>,
         events: Collection<String>,
@@ -122,19 +117,10 @@ data class ModuleSpec(
     }
 
     /**
-     * [part], a provider's implementation of part of this standard, in this edition's terms.
-     *
-     * The provider may have been built against an older or a newer edition than the host's. What
-     * this edition does not know (a function, an event, an optional parameter or field added
-     * later) is left out and listed in [Fit.Accepted.ignored]; what the provider leaves out of this
-     * edition is simply absent from the script's `__api`. It is refused only when it cannot work
-     * with this edition: another version, a changed type, or a required parameter or field that
-     * one side lacks.
-     *
-     * Every member it keeps has this edition's signature, all of its optional parameters included,
-     * so a script passes the same arguments, by name or by position, whichever provider answers.
-     * [Fit.Accepted.accepts] says which of them the provider understands; the rest are dropped on
-     * the way to it, as a standard promises ("each provider takes what it understands").
+     * Maps a provider's partial implementation [part], possibly from an older or newer edition,
+     * onto this edition. Members unknown here go to [Fit.Accepted.ignored]; kept members use this
+     * edition's signatures, and [Fit.Accepted.accepts] lists the parameters the provider takes.
+     * Refused on a version mismatch, a changed type, or a required field missing on one side.
      */
     fun fit(part: ModuleSpec): Fit {
         if (part.namespace != namespace) return Fit.Refused("it implements '${part.namespace}', not '$namespace'")
@@ -187,18 +173,16 @@ data class ModuleSpec(
                 ),
         )
 
-    /** What [ModuleSpec.read] made of a spec: [spec], and the members it had to leave out, with why. */
+    /** Result of [ModuleSpec.read]: the spec and the members skipped, with reasons. */
     data class Read(val spec: ModuleSpec, val skipped: List<String>)
 
     companion object {
-        /** Reads what [toValue] wrote, leaving out members it cannot read ([read]). */
+        /** Like [read], discarding the skipped list. */
         fun fromValue(value: Value): ModuleSpec = read(value).spec
 
         /**
-         * Reads what [toValue] wrote, one member at a time: a function or an event this side cannot
-         * read, such as one using a type a later contract added, is left out and named in
-         * [Read.skipped] instead of failing the whole module. Throws [IllegalArgumentException] only
-         * when the module itself is unreadable.
+         * Reads what [toValue] wrote. Unreadable members (e.g. using a newer type) go to
+         * [Read.skipped]; throws [IllegalArgumentException] only if the module itself is unreadable.
          */
         fun read(value: Value): Read {
             val map = value.asObjectOrNull() ?: throw IllegalArgumentException("A module spec is a map")
@@ -267,12 +251,9 @@ data class ModuleSpec(
     }
 }
 
-/** What a host makes of a provider's implementation of part of a standard ([ModuleSpec.fit]). */
+/** Result of [ModuleSpec.fit]. */
 sealed interface Fit {
-    /**
-     * [spec] is the part in the host's terms; [ignored] names what the provider offers beyond them;
-     * [accepts] names, per function, the parameters the provider understands.
-     */
+    /** [ignored] lists provider members unknown to the host; [accepts] maps each function to the parameters the provider takes. */
     data class Accepted(
         val spec: ModuleSpec,
         val ignored: List<String>,

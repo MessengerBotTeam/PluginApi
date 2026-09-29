@@ -14,12 +14,9 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * Moves large byte payloads out of Binder frames into sealed shared memory.
- *
- * Every Binder transaction of a process shares a ~1MB buffer, so an inlined image eventually
- * throws TransactionTooLarge. From [THRESHOLD_BYTES] up, bytes go out through [publish] ahead of
- * the frame, which keeps only an ID. Smaller payloads stay inline, where mapping would cost more
- * than it saves. Both ends use this the same way; only where [publish] sends differs.
+ * Moves byte payloads of [THRESHOLD_BYTES] or more into read-only shared memory, sent via [publish]
+ * ahead of the frame. Binder transactions share a ~1MB per-process buffer, so large inline payloads
+ * fail with TransactionTooLargeException.
  */
 class SharedBytes(
     private val publish: (transferId: Long, region: SharedMemory) -> Unit,
@@ -38,14 +35,14 @@ class SharedBytes(
             } finally {
                 SharedMemory.unmap(buffer)
             }
-            // Sealed before it leaves: the other side only ever reads it.
+            // Read-only before handing it over.
             region.setProtect(OsConstants.PROT_READ)
             transferIds.incrementAndGet().also { publish(it, region) }
         } catch (e: Exception) {
             Log.w(TAG, "Shared memory unavailable; keeping ${bytes.size} bytes inline", e)
             null
         } finally {
-            // Binder duplicated the descriptor during publish, so ours is done either way.
+            // Binder dups the descriptor during publish, so close ours either way.
             runCatching { region?.close() }
         }
     }
@@ -68,13 +65,11 @@ class SharedBytes(
         }
     }
 
-    /** Called by the transport when the other side hands a region over. */
     fun receive(
         transferId: Long,
         region: SharedMemory,
     ) {
-        // A region whose frame was dropped is never claimed. Transfer IDs only grow, so the oldest
-        // waiting is the one most likely orphaned; it makes room rather than refusing new ones.
+        // Regions whose frame was dropped are never claimed. IDs increase, so evict the oldest.
         while (received.size >= MAX_OUTSTANDING) {
             val oldest = received.keys.minOrNull() ?: break
             Log.w(TAG, "Discarding shared region $oldest: $MAX_OUTSTANDING wait for their frames")

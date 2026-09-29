@@ -11,7 +11,7 @@ import android.os.SharedMemory
 import com.xfl.msgbot.plugin.api.rpc.PluginTransport
 import com.xfl.msgbot.plugin.api.serialization.BytesChannel
 
-/** The plugin's end of one session: frames out through the host's callback, in through [receive]. */
+/** Plugin end of one session. */
 class PluginSessionTransport(private val callback: IPluginCallback) : PluginTransport {
     @Volatile private var listener: ((ByteArray) -> Unit)? = null
 
@@ -23,9 +23,9 @@ class PluginSessionTransport(private val callback: IPluginCallback) : PluginTran
         try {
             callback.onFrame(frame)
         } catch (_: DeadObjectException) {
-            // The host is gone; its death closes this session.
+            // Host died; the death recipient closes the session.
         } catch (e: RemoteException) {
-            // Alive but unable to take it (a full transaction buffer): the sender must hear of it.
+            // Host alive but rejected the frame (e.g. full transaction buffer); surface it to the sender.
             throw IllegalStateException("The host could not take a frame: ${e.message ?: e.javaClass.simpleName}", e)
         }
     }

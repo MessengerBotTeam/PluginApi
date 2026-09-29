@@ -8,11 +8,9 @@ package com.xfl.msgbot.plugin.api.rpc
 import com.xfl.msgbot.plugin.api.serialization.BytesChannel
 
 /**
- * Moves frames between the host and one plugin session: Binder in production, [LoopbackTransport]
- * in tests. It only moves bytes; [RpcPeer] gives them meaning.
+ * Carries raw frames between the host and one plugin session; [RpcPeer] interprets them.
  *
- * Frames must be delivered on a thread that never waits on a call of its own, or a blocking call
- * would wait for an answer queued behind itself.
+ * Deliver frames on a thread that never blocks on its own calls, or a blocking call deadlocks on its answer.
  */
 interface PluginTransport {
     fun send(frame: ByteArray)
@@ -21,6 +19,6 @@ interface PluginTransport {
 
     fun close()
 
-    /** How large byte payloads travel. Inline unless the transport can do better. */
+    /** Channel for large byte payloads. Defaults to inline. */
     val bytes: BytesChannel get() = BytesChannel.INLINE
 }

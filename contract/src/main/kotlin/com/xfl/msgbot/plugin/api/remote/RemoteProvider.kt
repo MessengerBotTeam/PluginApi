@@ -19,10 +19,7 @@ import com.xfl.msgbot.plugin.api.value.Value
 import com.xfl.msgbot.plugin.api.value.asArrayOrNull
 import com.xfl.msgbot.plugin.api.value.asStringOrNull
 
-/**
- * The host side of a provider running in a plugin: a [Provider] like any builtin one, so the host
- * has a single way of running providers. Its [modules] are what the plugin described itself as.
- */
+/** Host-side [Provider] proxy for a provider in a plugin. [modules] come from the plugin's `hello` reply. */
 class RemoteProvider private constructor(
     transport: PluginTransport,
     private val timeoutMs: Long,
@@ -87,7 +84,7 @@ class RemoteProvider private constructor(
     }
 
     companion object {
-        /** Opens the session and reads the module the provider offers. Throws when it will not say. */
+        /** Performs the `hello` handshake and reads the provider's modules. On failure closes the transport and throws. */
         fun connect(
             transport: PluginTransport,
             timeoutMs: Long = 15_000,

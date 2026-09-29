@@ -22,10 +22,8 @@ import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.Semaphore
 
 /**
- * The host side of an engine running in a plugin: a [ScriptEngine] like any builtin one. Calls
- * from the script are answered on [callExecutor], never on the transport thread, so a slow host
- * function cannot hold up the frames behind it. At most [maxPendingCalls] wait at once; beyond
- * that a call is answered unavailable, so a plugin cannot queue work on the host without bound.
+ * Host-side [ScriptEngine] proxy for an engine in a plugin. Host calls run on [callExecutor] so they
+ * do not block the transport thread; calls beyond [maxPendingCalls] are rejected as unavailable.
  */
 class RemoteScriptEngine private constructor(
     transport: PluginTransport,
@@ -100,10 +98,7 @@ class RemoteScriptEngine private constructor(
     }
 
     companion object {
-        /**
-         * Opens the session over [transport] and checks that the plugin speaks this protocol.
-         * Throws when it does not answer or cannot; the transport is closed then.
-         */
+        /** Performs the `hello` handshake. On failure closes the transport and throws. */
         fun connect(
             transport: PluginTransport,
             context: EngineContext,

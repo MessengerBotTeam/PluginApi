@@ -8,10 +8,7 @@ package com.xfl.msgbot.plugin.api.rpc
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 
-/**
- * An in-process pair of transports for tests. Frames still go through the codec, and each side
- * delivers on its own thread, so what passes here passes over Binder.
- */
+/** In-process transport pair for tests. Each side delivers on its own thread, like Binder. */
 class LoopbackTransport private constructor(name: String) : PluginTransport {
     private var peer: LoopbackTransport? = null
 
@@ -31,7 +28,7 @@ class LoopbackTransport private constructor(name: String) : PluginTransport {
     }
 
     private fun deliver(frame: ByteArray) {
-        // A closed peer drops the frame, as a dead Binder would, instead of throwing at the sender.
+        // A closed peer drops the frame silently, like a dead Binder.
         try {
             delivery.execute { listener?.invoke(frame) }
         } catch (_: RejectedExecutionException) {

@@ -9,18 +9,14 @@ import com.xfl.msgbot.plugin.api.call.Args
 import com.xfl.msgbot.plugin.api.value.Value
 
 /**
- * Offers modules to scripts: functions they call and events they hear. A provider can publish
- * several namespaces at once, standard ones such as `bot` (any compatible part of the standard)
- * and its own; a project combines as many providers as it likes. Providers know nothing about
- * engines or languages.
+ * Publishes modules (functions and events) to scripts, in standard namespaces such as `bot` and/or
+ * its own. Language-agnostic.
  *
  * ```kotlin
  * class KakaoProvider : Provider {
- *     private var context: ProviderContext? = null
- *
  *     override val modules = listOf(
  *         implement(StandardApi.Bot) {
- *             handle("send") { call -> sendIntent(call.args.stringOrNull("channelId"), call.args.string("text")) }
+ *             handle("send") { call -> send(call.args.stringOrNull("channelId"), call.args.string("text")) }
  *             emits("message")
  *         },
  *         provide("kakao") {
@@ -30,41 +26,32 @@ import com.xfl.msgbot.plugin.api.value.Value
  *             }
  *         },
  *     )
- *
- *     override fun start(context: ProviderContext) { this.context = context }
- *     override fun stop() { context = null }
  * }
  * ```
  *
- * [start], [stop], [close] and every handler run on one thread, so a provider needs no locking of
- * its own. [ProviderContext.emit] may be called from any thread.
+ * [start], [stop], [close] and all handlers run on one thread. [ProviderContext.emit] is thread-safe.
  */
 interface Provider : AutoCloseable {
-    /** Every namespace this provider publishes, at most one module each. */
+    /** At most one module per namespace. */
     val modules: List<ProviderModule>
 
-    /**
-     * Begins work for the projects in [ProviderContext.projects]. When their selection or options
-     * change the host stops the provider and starts it again with the new set.
-     */
+    /** Starts serving [ProviderContext.projects]. The host restarts the provider when projects or options change. */
     fun start(context: ProviderContext) = Unit
 
-    /** Ends what [start] began. Can be followed by another [start]. */
+    /** May be followed by another [start]. */
     fun stop() = Unit
 
-    /** Releases the provider for good, after a final [stop]. */
+    /** Called once, after the final [stop]. */
     override fun close() = Unit
 }
 
-/** A provider's view of the host while it runs. */
 interface ProviderContext {
-    /** Project ID -> this provider's options for that project, as declared in its manifest. */
+    /** Project ID -> this provider's options for that project. */
     val projects: Map<String, Map<String, String>>
 
     /**
-     * Sends [event], qualified (`bot.message`, `kakao.read`), to one project, or to every project
-     * using this provider when [projectId] is null. The event must be one of this provider's
-     * modules' and [payload] must match its schema; a mistake throws here, where it was made.
+     * Sends qualified [event] (`bot.message`) to [projectId], or to all projects when null. Throws
+     * if the event is not declared by this provider or [payload] does not match its schema.
      */
     fun emit(
         event: String,
@@ -78,14 +65,14 @@ interface ProviderContext {
     )
 }
 
-/** [emit] with plain Kotlin values: `context.emit("weather.alert", "text" to "Rain")`. */
+/** [emit] with Kotlin values converted by [Value.of]. */
 fun ProviderContext.emit(
     event: String,
     vararg fields: Pair<String, Any?>,
     projectId: String? = null,
 ) = emit(event, fields.associate { (key, value) -> key to Value.of(value) }, projectId)
 
-/** One call from one project to a function of one module. [options] are that project's settings for this provider. */
+/** [options] are the calling project's settings for this provider. */
 class ProviderCall(
     val projectId: String,
     val function: String,

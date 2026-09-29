@@ -18,24 +18,19 @@ import com.xfl.msgbot.plugin.api.schema.SchemaDsl
 import com.xfl.msgbot.plugin.api.schema.Type
 import com.xfl.msgbot.plugin.api.value.Value
 
-/**
- * A module and the code behind it. [spec] is what the host publishes and checks against; [call]
- * runs one function. Build one with [provide] or [implement].
- */
+/** A module spec and its implementation. Build with [provide] or [implement]. */
 class ProviderModule(
     val spec: ModuleSpec,
     private val dispatch: (ProviderCall) -> Value,
 ) {
-    /** Runs [call]. A [CallException] names the kind of failure; anything else thrown is [ErrorCode.FAILED]. */
+    /** Throws [CallException] for a specific [ErrorCode]; other exceptions mean [ErrorCode.FAILED]. */
     fun call(call: ProviderCall): Value = dispatch(call)
 }
 
-/** What a handler may return: a [Value], or anything [Value.of] converts. */
+/** Returns a [Value] or anything [Value.of] converts. */
 typealias Handler = (ProviderCall) -> Any?
 
-/**
- * Declares a module and implements it in one place. Every function needs a [ProviderFunctionBuilder.handle].
- */
+/** Declares and implements a module. Every function needs a [ProviderFunctionBuilder.handle]. */
 fun provide(
     namespace: String,
     version: Int = 1,
@@ -47,8 +42,8 @@ fun provide(
 }
 
 /**
- * Implements part of a module declared elsewhere, most often [com.xfl.msgbot.plugin.api.standard.StandardApi.Bot].
- * The published spec holds exactly the functions handled and the events declared with [ImplementationBuilder.emits].
+ * Implements part of an existing spec, such as [com.xfl.msgbot.plugin.api.standard.StandardApi.Bot].
+ * Publishes only the handled functions and the events listed in [ImplementationBuilder.emits].
  */
 fun implement(
     spec: ModuleSpec,
@@ -103,7 +98,6 @@ class ProviderFunctionBuilder internal constructor(
 ) : FunctionSpecBuilder(name, returns, doc) {
     internal var handler: Handler? = null
 
-    /** The code behind this function. Return a [Value] or any value [Value.of] converts. */
     fun handle(handler: Handler) {
         check(this.handler == null) { "handle { } given twice" }
         this.handler = handler
@@ -125,18 +119,14 @@ class ImplementationBuilder internal constructor(private val spec: ModuleSpec) {
         require(handlers.put(function, handler) == null) { "'$function' handled twice" }
     }
 
-    /** Events this implementation will send. Only these reach the published spec. */
+    /** Only these events are published. */
     fun emits(vararg events: String) {
         events.forEach { require(spec.event(it) != null) { "${spec.namespace} declares no event '$it'" } }
         emitted += events
     }
 }
 
-/**
- * This module as a host publishes it once [fit] accepted it: [Fit.Accepted.spec]'s signatures,
- * each call trimmed to the parameters the provider understands and each answer to what this
- * edition knows.
- */
+/** Wraps this module with [Fit.Accepted.spec], dropping arguments the provider does not accept and result fields the host does not know. */
 fun ProviderModule.fittedTo(fit: Fit.Accepted): ProviderModule =
     ProviderModule(fit.spec) { call ->
         val understood = fit.accepts[call.function]
@@ -145,7 +135,7 @@ fun ProviderModule.fittedTo(fit: Fit.Accepted): ProviderModule =
         fit.spec.function(call.function)?.conformResult(result) ?: result
     }
 
-/** This provider's modules by namespace. Throws when two claim the same one. */
+/** Throws if two modules share a namespace. */
 fun Provider.modulesByNamespace(): Map<String, ProviderModule> {
     val duplicate = modules.groupBy { it.spec.namespace }.filterValues { it.size > 1 }.keys
     require(duplicate.isEmpty()) { "A provider publishes $duplicate more than once" }

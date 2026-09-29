@@ -10,41 +10,25 @@ import com.xfl.msgbot.plugin.api.schema.ModuleSpec
 import com.xfl.msgbot.plugin.api.value.Value
 
 /**
- * Runs one language for one project. An engine does three things and nothing else:
+ * Runs one language for one project: binds the boundary globals (see
+ * [com.xfl.msgbot.plugin.api.binding.Binding]), provides the language runtime, then runs the
+ * profile and the entry file. The API shape comes from the profile, not the engine.
  *
- * 1. binds the language's side of the boundary (`__api`, `__host_call`, `__host_call_async`,
- *    `__dispatch`, see [com.xfl.msgbot.plugin.api.binding.Binding]) using its language binding,
- * 2. provides the language runtime a script expects (timers, promises, module loading),
- * 3. runs the profile, then the project's entry file.
- *
- * It never decides what the API looks like: that is the profile's job, driven by [LoadRequest.api].
- *
- * Every method runs on the engine's single thread, the one [EngineContext.scheduler] posts to.
+ * Every method except [interrupt] runs on the engine thread ([EngineContext.scheduler]).
  */
 interface ScriptEngine : AutoCloseable {
-    /**
-     * Binds the API, runs the profile and then [LoadRequest.entry]. Throws [EngineException] when
-     * the script cannot load; the compile that asked is waiting to say so.
-     */
+    /** Binds the API, runs the profile, then [LoadRequest.entry]. Throws [EngineException] if the script cannot load. */
     fun load(request: LoadRequest)
 
-    /**
-     * Calls the language's `__dispatch(name, payload)`. Returns once synchronous handlers, and the
-     * host calls they make, have finished; work they start asynchronously is not waited for.
-     */
+    /** Calls `__dispatch(name, payload)`. Returns after synchronous handlers finish; async work is not awaited. */
     fun dispatch(event: ScriptEvent)
 
-    /** Evaluates [source] in the script's global scope. For tests and a REPL. */
+    /** Evaluates [source] in the global scope. For tests and a REPL. */
     fun eval(source: String): Value
 
     /**
-     * Stops the script running on the engine thread now, the one exception to that thread: it is
-     * called from another one, while [load], [dispatch] or [eval] may be busy with a script that
-     * never returns (`while (true) {}`). That call should throw soon after, with an
-     * [EngineException]; the engine stays usable. When nothing runs, it does nothing.
-     *
-     * The host calls it when a script overruns its time and before it closes an engine that is
-     * still busy. Without it such a script keeps a thread and a core until the process dies.
+     * Called from another thread to stop a running script (e.g. `while (true) {}`). The busy call
+     * should then throw [EngineException] and the engine stays usable. No-op when idle.
      */
     fun interrupt()
 
@@ -56,23 +40,20 @@ fun interface ScriptEngineFactory {
     fun create(context: EngineContext): ScriptEngine
 }
 
-/** What an engine is given: the host, its thread, and somewhere to report what goes wrong later. */
+/** The host, thread and error sink given to an engine. */
 interface EngineContext {
     val host: HostBridge
 
     val scheduler: EngineScheduler
 
-    /** For failures of work nobody is waiting for: a timer callback, a rejected promise. */
+    /** Reports failures no caller awaits, such as a timer callback or an unhandled rejection. */
     fun reportError(
         message: String,
         error: Throwable? = null,
     )
 }
 
-/**
- * The one way down from a script to the host. [function] is qualified (`weather.forecast`);
- * [args] are named, as the schema names the parameters.
- */
+/** Script-to-host calls. [function] is qualified (`weather.forecast`); [args] are keyed by parameter name. */
 interface HostBridge {
     /** Blocks the engine thread until the host answers. */
     fun call(
@@ -88,9 +69,9 @@ interface HostBridge {
     )
 }
 
-/** The engine thread. Tasks run one at a time, in order, and never after the engine closes. */
+/** The engine thread. Tasks run serially, in order, and never after the engine closes. */
 interface EngineScheduler {
-    /** Runs [task] on the engine thread soon. Safe to call from any thread. */
+    /** Queues [task] on the engine thread. Safe to call from any thread. */
     fun post(task: () -> Unit)
 
     /** Runs [task] after [delayMs], and every [delayMs] after that when [repeat]. */
@@ -106,15 +87,10 @@ fun interface Cancellable {
 }
 
 /**
- * Everything one load needs.
- *
- * @property language what [sources] are written in; a polyglot engine cannot guess it.
- * @property api every module this project may use, host modules first. Bound as `__api` data.
+ * @property api modules this project may use, host modules first; bound as `__api`.
  * @property profile the language facade, run after `__api` is bound and before [entry].
- * @property entry the path in [sources] that runs as the project's main script.
- * @property sources the project's source files by path relative to its folder, for the language's
- *   own module loading (`require('./util')`).
- * @property options this engine's per-project settings, as the engine declared them.
+ * @property sources project files keyed by path relative to the project folder.
+ * @property options per-project settings the engine declared.
  */
 data class LoadRequest(
     val language: String,
@@ -134,16 +110,16 @@ data class LoadRequest(
     fun apiValue(): Value.VArray = Value.VArray(api.map { it.toValue() })
 }
 
-/** A profile's facade source. [name] is what stack traces should call it. */
+/** A profile's facade source. [name] is the file name shown in stack traces. */
 data class ProfileScript(val name: String, val source: String)
 
-/** An event for the script: [name] is qualified (`bot.message`); [payload] matches its schema. */
+/** [name] is qualified (`bot.message`); [payload] matches the event's schema. */
 data class ScriptEvent(
     val name: String,
     val payload: Map<String, Value> = emptyMap(),
 )
 
-/** A script failed in a way its author should read: a syntax error, a handler that threw. */
+/** A script error meant for its author, such as a syntax error or a throwing handler. */
 class EngineException(
     message: String,
     cause: Throwable? = null,

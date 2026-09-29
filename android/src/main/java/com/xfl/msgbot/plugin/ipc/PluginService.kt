@@ -20,9 +20,8 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * The one service a plugin APK exposes. Say what it contains, keyed by the IDs in its
- * `msgbot_plugin.xml`, and everything else (sessions, threads, Binder) is done here. A plugin that
- * adds Lua and a weather module, say:
+ * The service a plugin APK exposes. Subclasses map manifest IDs to factories; sessions, threads and
+ * Binder are handled here.
  *
  * ```kotlin
  * class MyPluginService : PluginService() {
@@ -31,10 +30,8 @@ import java.util.concurrent.atomic.AtomicLong
  * }
  * ```
  *
- * An APK that only ships profiles can name this class in its manifest as it is.
- *
- * Every project gets its own session, so hold no engine or provider state outside the instances
- * these factories make.
+ * A profile-only APK can use this class directly. Each project gets its own session, so keep no
+ * state outside the instances the factories create.
  */
 open class PluginService : Service() {
     protected open val engines: Map<String, ScriptEngineFactory> = emptyMap()
@@ -57,8 +54,7 @@ open class PluginService : Service() {
                 component: String,
                 callback: IPluginCallback,
             ): Long {
-                // The manifest's android:permission already keeps other apps out; this holds even
-                // when a plugin forgets to declare it.
+                // Enforced here too in case the manifest omits android:permission.
                 if (checkCallingOrSelfPermission(PluginManifestSchema.PERMISSION) != PackageManager.PERMISSION_GRANTED) {
                     throw SecurityException("Only MessengerBotR may open plugin sessions")
                 }

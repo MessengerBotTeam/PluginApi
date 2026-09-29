@@ -71,7 +71,7 @@ class ModuleSpecTest {
         assertEquals(Fit.Refused("bot.image leaves out the required parameter 'token'"), StandardApi.Bot.fit(forged))
         val retyped = moduleSpec("bot") { function("reply", returns = Type.STRING) { param("text", Type.STRING) } }
         assertTrue((StandardApi.Bot.fit(retyped) as Fit.Refused).reason.contains("answers string"))
-        // The host may leave room out, so a provider cannot insist on it.
+        // room is optional in the standard, so a provider may not require it.
         val demanding =
             moduleSpec("bot") {
                 function("send", returns = Type.BOOL) {
@@ -84,7 +84,7 @@ class ModuleSpecTest {
 
     @Test
     fun `a provider built against an older edition fits`() {
-        // Written before send learned channelId, packageName and extra, and before message had extra.
+        // Predates send's channelId, packageName and extra, and message's extra.
         val older =
             moduleSpec("bot") {
                 function("send", returns = Type.BOOL) {
@@ -97,7 +97,7 @@ class ModuleSpecTest {
             }
         val fit = assertIs<Fit.Accepted>(StandardApi.Bot.fit(older))
         assertEquals(emptyList<String>(), fit.ignored)
-        // Scripts see this edition's signature whoever answers; the provider hears what it knows.
+        // Published signature is this edition's; accepts lists what the provider takes.
         assertEquals(StandardApi.Bot.function("send"), fit.spec.function("send"))
         assertEquals(setOf("text", "room"), fit.accepts["send"])
         assertIs<Fit.Refused>(StandardApi.Bot.fit(older.copy(version = 2)))

@@ -22,19 +22,16 @@ import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
-/**
- * Runs one engine the way the host does: on its own [EngineThread], with a scripted host behind
- * it. Useful on its own for an engine's tests beyond the conformance suite.
- */
+/** Runs an engine on its own [EngineThread] against a scripted host, as the host would. */
 class EngineHarness(factory: ScriptEngineFactory) : AutoCloseable {
-    /** One host call as the host saw it, synchronous or not, and which thread made it. */
+    /** A recorded host call (sync or async) and the calling thread. */
     data class Call(val function: String, val args: Map<String, Value>, val thread: String)
 
     val threadName = "tck-engine"
     val calls = CopyOnWriteArrayList<Call>()
     val errors = CopyOnWriteArrayList<String>()
 
-    /** What the host answers, by qualified function name. Anything else is an unknown function. */
+    /** Host implementations by qualified name. Unlisted functions answer unknown_function. */
     val functions = ConcurrentHashMap<String, (Map<String, Value>) -> CallResult>()
 
     private val thread = EngineThread(threadName) { message, _ -> errors += message }
@@ -83,7 +80,7 @@ class EngineHarness(factory: ScriptEngineFactory) : AutoCloseable {
 
     fun eval(source: String): Value = onEngine { engine.eval(source) }
 
-    /** Runs [block] on the engine thread and waits for it, rethrowing what it threw. */
+    /** Runs [block] on the engine thread, waits, and rethrows its exception. */
     fun <T> onEngine(block: () -> T): T =
         try {
             onEngineAsync(block).get(30, TimeUnit.SECONDS)
@@ -91,13 +88,13 @@ class EngineHarness(factory: ScriptEngineFactory) : AutoCloseable {
             throw e.cause ?: e
         }
 
-    /** Runs [block] on the engine thread without waiting, for a test that stops it from outside. */
+    /** Like [onEngine] without waiting. */
     fun <T> onEngineAsync(block: () -> T): CompletableFuture<T> = thread.submit(block)
 
-    /** What the host does to a script that overran its time: [ScriptEngine.interrupt], from this thread. */
+    /** Calls [ScriptEngine.interrupt] from the calling thread, as the host does on timeout. */
     fun interrupt() = engine.interrupt()
 
-    /** Polls [condition] until it holds or [timeoutMs] passes; whether it held. */
+    /** Polls [condition] until true or [timeoutMs] elapses. */
     fun awaitUntil(
         timeoutMs: Long = 5_000,
         condition: () -> Boolean,
@@ -112,14 +109,13 @@ class EngineHarness(factory: ScriptEngineFactory) : AutoCloseable {
 
     @Volatile private var engineClosed = false
 
-    /** Closes the engine on its thread, then the thread. */
     override fun close() {
         runCatching { closeEngineOnly() }
         thread.shutdownNow()
         worker.shutdownNow()
     }
 
-    /** Closes only the engine, leaving its thread running, to see what the engine itself stops. */
+    /** Closes the engine but keeps its thread, to test what the engine stops by itself. */
     fun closeEngineOnly() {
         if (engineClosed) return
         engineClosed = true

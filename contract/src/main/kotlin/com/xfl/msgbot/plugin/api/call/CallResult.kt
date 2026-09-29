@@ -7,18 +7,13 @@ package com.xfl.msgbot.plugin.api.call
 
 import com.xfl.msgbot.plugin.api.value.Value
 
-/**
- * What a call answers: a value, or why there is none. A sealed type makes every engine decide
- * what it does with [Err] before it compiles; a binding turns it into its language's error,
- * carrying [Err.code] for scripts to branch on.
- */
+/** Result of a host call. Bindings turn [Err] into a language error that carries [Err.code]. */
 sealed interface CallResult {
     data class Ok(val value: Value) : CallResult
 
-    /** [code] is one of [ErrorCode]; [message] is for the human. */
+    /** [code] is one of [ErrorCode]. */
     data class Err(val code: String, val message: String) : CallResult
 
-    /** The value, or a [CallException] carrying the error. */
     fun getOrThrow(): Value =
         when (this) {
             is Ok -> value
@@ -37,7 +32,7 @@ sealed interface CallResult {
         fun unknownFunction(name: String): CallResult =
             Err(ErrorCode.UNKNOWN_FUNCTION, "No function named '$name' is available to this project")
 
-        /** Runs [block], answering its value or the error it threw. */
+        /** Non-[CallException] errors become [ErrorCode.FAILED]. */
         inline fun catching(block: () -> Value): CallResult =
             try {
                 Ok(block())
@@ -50,20 +45,19 @@ sealed interface CallResult {
 }
 
 object ErrorCode {
-    /** No such function, or its module is not selected by this project. A typo lands here. */
+    /** No such function, or its module is not selected by this project. */
     const val UNKNOWN_FUNCTION = "unknown_function"
 
     /** The function exists, but not with these arguments. */
     const val BAD_ARGS = "bad_args"
 
-    /** Whoever answers this is not there right now (a plugin disconnected, access revoked); trying later may work. */
+    /** The implementation is temporarily unreachable (plugin disconnected, access revoked); retry may work. */
     const val UNAVAILABLE = "unavailable"
 
-    /** It should have worked and did not. */
     const val FAILED = "failed"
 }
 
-/** Thrown by an implementation to answer with a specific [ErrorCode]; anything else thrown becomes [ErrorCode.FAILED]. */
+/** Throw to fail a call with a specific [ErrorCode]; other exceptions become [ErrorCode.FAILED]. */
 class CallException(
     val code: String,
     message: String,

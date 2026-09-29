@@ -12,16 +12,10 @@ import com.xfl.msgbot.plugin.api.schema.nullable
 import com.xfl.msgbot.plugin.api.schema.struct
 
 /**
- * The modules every project can count on, and the standards providers implement. Profiles build
- * their facades on these.
+ * Built-in modules. [HOST] modules are implemented only by the host. [Bot] is a standard that
+ * providers implement in parts, fitted with [ModuleSpec.fit].
  *
- * - [Project], [Log], [File], [Db], [Http], [Device], [Sys]: answered by the host, and only by it.
- * - [Bot]: a standard. Providers implement parts of it, fitted to the host's edition
- *   ([ModuleSpec.fit]); a project may combine several, one per member.
- *
- * Standards evolve by addition: a new function, event, optional parameter or optional field keeps
- * the version, so a provider built against an older or a newer edition than the host's still
- * works with it. Only an incompatible change raises the version.
+ * Additive changes (functions, events, optional parameters or fields) keep the version.
  */
 object StandardApi {
     val Project: ModuleSpec =
@@ -105,13 +99,9 @@ object StandardApi {
         }
 
     /**
-     * Messaging, messenger-agnostic. Any number of providers may implement parts of it (a
-     * notification reader, a database reader, an Intent sender); a project composes them.
-     *
-     * A message requires only what every messenger has. Whatever addresses a room or a message is
-     * optional and is passed whole, so each provider takes what it understands: a token it issued
-     * itself, a room name or a channel ID. That is also what lets one provider answer messages
-     * another one received.
+     * Messenger-agnostic messaging, composed from several providers. Address fields are optional and
+     * all passed through, so each provider uses the ones it understands and can answer messages
+     * another provider received.
      */
     val Bot: ModuleSpec =
         moduleSpec("bot") {
@@ -171,7 +161,7 @@ object StandardApi {
             }
         }
 
-    /** Host services for profiles: which events the script listens to, so no other crosses to it. */
+    /** Lets profiles filter which events reach the script. */
     val Sys: ModuleSpec =
         moduleSpec("sys") {
             doc = "The script's own plumbing."
@@ -180,12 +170,11 @@ object StandardApi {
             }
         }
 
-    /** Answered by the host for every project. */
     val HOST: List<ModuleSpec> = listOf(Project, Log, File, Db, Http, Device, Sys)
 
-    /** Namespaces no provider may publish: the host answers them. */
+    /** Namespaces providers may not publish. */
     val HOST_NAMESPACES: Set<String> = HOST.map { it.namespace }.toSet()
 
-    /** Namespaces with a published standard: a provider may implement any compatible part of one. */
+    /** Standards a provider may implement in part. */
     val STANDARDS: Map<String, ModuleSpec> = listOf(Bot).associateBy { it.namespace }
 }

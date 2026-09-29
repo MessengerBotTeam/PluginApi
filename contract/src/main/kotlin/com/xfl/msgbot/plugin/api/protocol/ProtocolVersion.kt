@@ -6,19 +6,18 @@
 package com.xfl.msgbot.plugin.api.protocol
 
 /**
- * The wire protocol between host and plugin. Each side speaks a range, [MIN_SUPPORTED]..[CURRENT];
- * the host offers its range in `hello` and the plugin answers with the newest version both speak,
- * so either side can move ahead without leaving the other behind.
+ * Host-plugin wire protocol version. Each side supports [MIN_SUPPORTED]..[CURRENT]; the host sends
+ * its range in `hello` and the plugin picks the newest common version.
  *
- * 0 while the contract is unreleased: nothing published speaks it yet, so anything may change.
+ * 0 means unreleased; anything may change.
  */
 object ProtocolVersion {
     const val CURRENT: Int = 0
 
-    /** The oldest version this side still speaks. Widen it instead of moving in lockstep. */
+    /** Lower this rather than raising it in lockstep with [CURRENT]. */
     const val MIN_SUPPORTED: Int = 0
 
-    /** The newest version both this side and one speaking [otherMin]..[otherMax] speak, or null when none. */
+    /** Newest version shared with [otherMin]..[otherMax], or null. */
     fun negotiate(
         otherMin: Int,
         otherMax: Int,
@@ -28,9 +27,8 @@ object ProtocolVersion {
     }
 
     /**
-     * Whether a plugin whose manifest names [declared], the newest version it speaks, can speak one
-     * of this side's. A newer plugin usually still speaks older versions, so only one too old to
-     * reach [MIN_SUPPORTED] is ruled out before binding; `hello` settles the rest.
+     * Pre-bind check on a manifest's newest protocol [declared]. Only rejects plugins older than
+     * [MIN_SUPPORTED]; newer ones may still speak ours, which `hello` decides.
      */
     fun mayBeCompatible(declared: Int): Boolean = declared >= MIN_SUPPORTED
 }

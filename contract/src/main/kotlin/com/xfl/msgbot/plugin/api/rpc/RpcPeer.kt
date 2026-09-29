@@ -20,12 +20,8 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
-/** Answers what the other side of an [RpcPeer] sends. */
 interface RpcHandler {
-    /**
-     * [reply] exactly once, from any thread, whenever the answer is ready. This runs on the
-     * transport's delivery thread, so anything slow belongs on another one.
-     */
+    /** Call [reply] exactly once, from any thread. Runs on the delivery thread, so offload slow work. */
     fun onRequest(
         method: String,
         params: Value,
@@ -39,11 +35,9 @@ interface RpcHandler {
 }
 
 /**
- * One end of a symmetric request/response channel. Both sides can ask, answer and notify, so the
- * host and a plugin speak the same protocol whatever roles they play on top of it.
+ * One end of a symmetric request/response/notify channel.
  *
- * Answers to [requestAsync] arrive on the transport or timeout thread; hop to your own thread
- * before touching state that lives on one.
+ * [requestAsync] callbacks run on the transport or timeout thread.
  */
 class RpcPeer(
     private val transport: PluginTransport,
@@ -64,7 +58,7 @@ class RpcPeer(
         transport.setListener(::onFrame)
     }
 
-    /** Blocks until the answer arrives, [timeoutMs] passes (0: never), or the peer closes. */
+    /** Blocks until answered, timed out ([timeoutMs] 0 means no timeout), or closed. */
     fun request(
         method: String,
         params: Value = Value.VNull,
@@ -101,7 +95,7 @@ class RpcPeer(
                     TimeUnit.MILLISECONDS,
                 )
         }
-        // Closed between the check and the registration: nobody else will answer it.
+        // close() may have run after the check above and missed this entry.
         if (closed.get()) {
             complete(id, CallResult.unavailable("The connection is closed"))
             return
@@ -119,7 +113,7 @@ class RpcPeer(
         send(frame(NOTIFY, METHOD to Value.VString(method), PARAMS to params)) { onProtocolError("Could not send '$method': $it") }
     }
 
-    /** Fails everything still waiting, then closes the transport. Safe to call twice. */
+    /** Fails pending requests and closes the transport. Idempotent. */
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         pending.keys.toList().forEach { complete(it, CallResult.unavailable("The connection closed")) }
@@ -139,10 +133,7 @@ class RpcPeer(
         }
     }
 
-    /**
-     * Nothing a frame does may escape to the transport: on Binder that would take the whole process
-     * down, so even an [Error] from a handler ends here as an answer or a protocol error.
-     */
+    /** Catches every Throwable: anything escaping to a Binder thread crashes the process. */
     private fun onFrame(bytes: ByteArray) {
         if (closed.get()) return
         val frame =
@@ -161,8 +152,7 @@ class RpcPeer(
                 val reply: (CallResult) -> Unit = { result ->
                     if (answered.compareAndSet(false, true) && !closed.get()) {
                         send(frame(RESPONSE, ID to Value.VInt(id), *resultFields(result))) { problem ->
-                            // The answer itself could not travel (too deep, too large): say so, or the
-                            // other side waits for its timeout.
+                            // Unsendable result (too deep or large): send an error so the caller does not wait for its timeout.
                             val failure = CallResult.failed("The answer to '$method' could not be sent: $problem")
                             send(frame(RESPONSE, ID to Value.VInt(id), *resultFields(failure))) { onProtocolError("Could not answer '$method': $it") }
                         }
@@ -194,11 +184,7 @@ class RpcPeer(
         }
     }
 
-    /**
-     * A frame can outgrow a transaction even when no single value in it does, such as a project's
-     * many source files. Past [INLINE_FRAME_BYTES] it travels out of band the way large bytes do,
-     * and only a pointer to it goes inline.
-     */
+    /** Frames over [INLINE_FRAME_BYTES] go out of band, since many small values can still exceed a Binder transaction. */
     private inline fun send(
         frame: Value,
         onFailure: (String) -> Unit,
@@ -247,7 +233,7 @@ class RpcPeer(
         const val RESPONSE = 2L
         const val NOTIFY = 3L
 
-        /** A frame that was sent out of band; [ID] names the transfer, [LENGTH] its size. */
+        /** Out-of-band frame pointer: [ID] names the transfer, [LENGTH] its size. */
         const val SHARED = 4L
 
         const val INLINE_FRAME_BYTES = 64 * 1024

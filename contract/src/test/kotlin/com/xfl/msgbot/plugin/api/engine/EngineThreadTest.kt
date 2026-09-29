@@ -14,7 +14,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
-/** Nothing handed to an engine thread disappears without an answer. */
 class EngineThreadTest {
     @Test
     fun `submitted work answers with what it returned or threw`() {
@@ -31,7 +30,7 @@ class EngineThreadTest {
         val busy = CountDownLatch(1)
         thread.submit {
             busy.countDown()
-            // A script that ignores Java interrupts.
+            // Busy loop that ignores Java interrupts, like a running script.
             val until = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(300)
             while (System.nanoTime() < until) Thread.onSpinWait()
         }

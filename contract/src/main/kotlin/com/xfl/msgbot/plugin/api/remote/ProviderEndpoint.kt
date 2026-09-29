@@ -25,11 +25,10 @@ import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * The plugin side of a provider session: creates the [Provider] and runs it, its handlers
- * included, on one thread. [com.xfl.msgbot.plugin.ipc.PluginService] makes one per session.
+ * Plugin side of a provider session: creates the [Provider] and runs it on one thread. Created per
+ * session by [com.xfl.msgbot.plugin.ipc.PluginService].
  *
- * An event is checked against the provider's own spec before it leaves, so a mistake shows up as
- * an exception at the `emit` that made it, not as a silent drop on the host.
+ * Validates emitted events locally so `emit` throws at the call site instead of the host dropping them.
  */
 class ProviderEndpoint(
     transport: PluginTransport,
@@ -40,7 +39,7 @@ class ProviderEndpoint(
 
     @Volatile private var provider: Provider? = null
 
-    // Read once the provider exists; every request is queued behind its creation.
+    // Safe to read from requests: they are queued behind provider creation.
     @Volatile private var modules: Map<String, ProviderModule> = emptyMap()
 
     @Volatile private var startupFailure: String? = null
@@ -146,7 +145,7 @@ class ProviderEndpoint(
 
     private fun reportError(message: String) = peer.notify(Wire.PROVIDER_ERROR, Wire.obj("message" to message))
 
-    /** Runs [block] on the provider's thread; whatever it throws, [Error]s included, is answered. */
+    /** Catches Throwable so every request gets a reply. */
     private fun onProvider(
         reply: (CallResult) -> Unit,
         block: (Provider) -> Value,

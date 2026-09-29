@@ -6,12 +6,8 @@
 package com.xfl.msgbot.plugin.api.value
 
 /**
- * Everything that crosses between the host, plugins and scripts: JSON plus 64-bit integers and
- * bytes. Each language maps this closed set exactly once, in its binding, so a value means the
- * same thing to every engine and every profile of that language.
- *
- * Host resources a script only hands back (a reply target, an image) travel as opaque strings:
- * a separate reference type would need its own mapping in every language for no gain.
+ * Values exchanged between host, plugins and scripts: JSON plus 64-bit integers and bytes. Each
+ * language binding maps this set. Opaque host handles travel as strings.
  */
 sealed interface Value {
     data object VNull : Value
@@ -19,7 +15,7 @@ sealed interface Value {
     @JvmInline
     value class VBool(val value: Boolean) : Value
 
-    /** 64-bit, so an ID survives every language; a JavaScript binding widens past 2^53 to BigInt. */
+    /** 64-bit; the JavaScript binding uses BigInt beyond 2^53. */
     @JvmInline
     value class VInt(val value: Long) : Value
 
@@ -29,7 +25,7 @@ sealed interface Value {
     @JvmInline
     value class VString(val value: String) : Value
 
-    /** Compared by content. A transport moves large ones out of the frame on its own. */
+    /** Compared by content. */
     class VBytes(val value: ByteArray) : Value {
         override fun equals(other: Any?): Boolean = other is VBytes && value.contentEquals(other.value)
 
@@ -48,10 +44,7 @@ sealed interface Value {
         val TRUE: Value = VBool(true)
         val FALSE: Value = VBool(false)
 
-        /**
-         * Converts an ordinary Kotlin value: null, Boolean, whole and floating numbers, strings,
-         * ByteArray, lists/arrays, and maps with string keys, nested freely. Unit is null.
-         */
+        /** Converts a Kotlin value (primitives, strings, ByteArray, collections, string-keyed maps). Unit becomes null. */
         fun of(value: Any?): Value =
             when (value) {
                 null, Unit -> VNull
@@ -81,7 +74,6 @@ sealed interface Value {
     }
 }
 
-/** The plain Kotlin form of this value: null, Boolean, Long, Double, String, ByteArray, List, Map. */
 fun Value.toKotlin(): Any? =
     when (this) {
         Value.VNull -> null
