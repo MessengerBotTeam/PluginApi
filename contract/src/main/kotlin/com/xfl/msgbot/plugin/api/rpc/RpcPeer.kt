@@ -154,7 +154,9 @@ class RpcPeer(
                         send(frame(RESPONSE, ID to Value.VInt(id), *resultFields(result))) { problem ->
                             // Unsendable result (too deep or large): send an error so the caller does not wait for its timeout.
                             val failure = CallResult.failed("The answer to '$method' could not be sent: $problem")
-                            send(frame(RESPONSE, ID to Value.VInt(id), *resultFields(failure))) { onProtocolError("Could not answer '$method': $it") }
+                            send(frame(RESPONSE, ID to Value.VInt(id), *resultFields(failure))) {
+                                onProtocolError("Could not answer '$method': $it")
+                            }
                         }
                     }
                 }
@@ -169,7 +171,11 @@ class RpcPeer(
                 val code = frame[ERROR_CODE]?.asStringOrNull()
                 complete(
                     id,
-                    if (code != null) CallResult.Err(code, frame[ERROR_MESSAGE]?.asStringOrNull().orEmpty()) else CallResult.Ok(frame[VALUE] ?: Value.VNull),
+                    if (code != null) {
+                        CallResult.Err(code, frame[ERROR_MESSAGE]?.asStringOrNull().orEmpty())
+                    } else {
+                        CallResult.Ok(frame[VALUE] ?: Value.VNull)
+                    },
                 )
             }
             NOTIFY -> {
@@ -210,7 +216,9 @@ class RpcPeer(
         if (frame[KIND]?.asLongOrNull() != SHARED) return frame
         val id = frame[ID]?.asLongOrNull()
         val length = frame[LENGTH]?.asLongOrNull()
-        if (id == null || length == null || length !in 0..ValueCodec.MAX_SHARED_BYTES) throw MalformedFrameException("A shared frame without a valid id or length")
+        if (id == null || length == null || length !in 0..ValueCodec.MAX_SHARED_BYTES) {
+            throw MalformedFrameException("A shared frame without a valid id or length")
+        }
         val inner = decode(transport.bytes.resolve(id, length.toInt()))
         if (inner[KIND]?.asLongOrNull() == SHARED) throw MalformedFrameException("A shared frame inside a shared frame")
         return inner

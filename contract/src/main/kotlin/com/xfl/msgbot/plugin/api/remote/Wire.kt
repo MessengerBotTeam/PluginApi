@@ -63,7 +63,8 @@ internal object Wire {
         val agreed =
             ProtocolVersion.negotiate(hostMin, hostMax)
                 ?: return CallResult.unavailable(
-                    "This plugin speaks protocol ${ProtocolVersion.MIN_SUPPORTED}..${ProtocolVersion.CURRENT}; the host speaks $hostMin..$hostMax",
+                    "This plugin speaks protocol ${ProtocolVersion.MIN_SUPPORTED}..${ProtocolVersion.CURRENT}; " +
+                        "the host speaks $hostMin..$hostMax",
                 )
         return CallResult.ok(obj("protocol" to agreed, "modules" to modules().map { it.toValue() }))
     }
@@ -96,7 +97,10 @@ internal object Wire {
             api = map.getValue("api").list().map(ModuleSpec::fromValue),
             profile = ProfileScript(profile.string("name"), profile.string("source")),
             entry = map.string("entry"),
-            sources = map.getValue("sources").map().mapValues { (_, v) -> v.asStringOrNull() ?: throw IllegalArgumentException("A source is text") },
+            sources =
+                map.getValue("sources").map().mapValues { (_, v) ->
+                    v.asStringOrNull() ?: throw IllegalArgumentException("A source is text")
+                },
             options = map["options"]?.map()?.mapValues { (_, v) -> v.asStringOrNull().orEmpty() }.orEmpty(),
         )
     }

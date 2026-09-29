@@ -63,9 +63,15 @@ open class PluginService : Service() {
                     try {
                         when (role) {
                             PluginRole.ENGINE ->
-                                EngineEndpoint(transport, engines[component] ?: throw IllegalArgumentException("This plugin has no engine '$component'"))
+                                EngineEndpoint(
+                                    transport,
+                                    engines[component] ?: throw IllegalArgumentException("This plugin has no engine '$component'"),
+                                )
                             PluginRole.PROVIDER ->
-                                ProviderEndpoint(transport, providers[component] ?: throw IllegalArgumentException("This plugin has no provider '$component'"))
+                                ProviderEndpoint(
+                                    transport,
+                                    providers[component] ?: throw IllegalArgumentException("This plugin has no provider '$component'"),
+                                )
                             else -> throw IllegalArgumentException("Unknown role '$role'")
                         }
                     } catch (e: Throwable) {

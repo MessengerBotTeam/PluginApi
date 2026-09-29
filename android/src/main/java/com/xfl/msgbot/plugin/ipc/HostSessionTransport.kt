@@ -95,7 +95,8 @@ class HostSessionTransport(private val service: IPluginService) : PluginTranspor
         session.takeIf { it > 0 }?.let { runCatching { service.close(it) } }
     }
 
-    private fun requireSession(): Long = session.takeIf { it > 0 && !closed.get() } ?: throw IllegalStateException("The plugin session is not open")
+    private fun requireSession(): Long =
+        session.takeIf { it > 0 && !closed.get() } ?: throw IllegalStateException("The plugin session is not open")
 
     private companion object {
         const val MAX_WAITING = 64

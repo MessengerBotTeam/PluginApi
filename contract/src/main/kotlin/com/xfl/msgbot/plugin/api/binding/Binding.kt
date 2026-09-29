@@ -46,7 +46,8 @@ object JavaScriptBinding {
             .bufferedReader(Charsets.UTF_8)
             .use { it.readText() }
 
-    private fun jsonObject(entries: Map<String, String>): String = entries.entries.joinToString(prefix = "{", postfix = "}") { (k, v) -> "${jsonString(k)}: ${jsonString(v)}" }
+    private fun jsonObject(entries: Map<String, String>): String =
+        entries.entries.joinToString(prefix = "{", postfix = "}") { (k, v) -> "${jsonString(k)}: ${jsonString(v)}" }
 
     private fun jsonString(text: String): String =
         buildString {

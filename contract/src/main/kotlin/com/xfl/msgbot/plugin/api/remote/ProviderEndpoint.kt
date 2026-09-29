@@ -96,9 +96,11 @@ class ProviderEndpoint(
                             try {
                                 val map = params.map()
                                 val project = map.string("project")
-                                val (namespace, name) = Names.split(map.string("function")) ?: throw IllegalArgumentException("unqualified function")
+                                val (namespace, name) =
+                                    Names.split(map.string("function")) ?: throw IllegalArgumentException("unqualified function")
                                 val module = modules[namespace] ?: return reply(CallResult.unknownFunction(map.string("function")))
-                                module to ProviderCall(project, name, Args(map.getValue("args").map()), running?.projects?.get(project).orEmpty())
+                                val options = running?.projects?.get(project).orEmpty()
+                                module to ProviderCall(project, name, Args(map.getValue("args").map()), options)
                             } catch (e: Exception) {
                                 return reply(CallResult.badArgs("Malformed call: ${e.message}"))
                             }

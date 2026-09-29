@@ -131,7 +131,9 @@ data class ModuleSpec(
             part.functions.mapNotNull { declared ->
                 val member = qualified(declared.name)
                 val standard = function(declared.name) ?: return@mapNotNull null.also { ignored += member }
-                if (!declared.returns.fits(standard.returns)) return Fit.Refused("$member answers ${declared.returns}, not ${standard.returns}")
+                if (!declared.returns.fits(standard.returns)) {
+                    return Fit.Refused("$member answers ${declared.returns}, not ${standard.returns}")
+                }
                 fieldsProblem(member, "parameter", declared.params, standard.params)?.let { return Fit.Refused(it) }
                 val names = declared.params.map { it.name }.toSet()
                 names.filter { standard.params.none { p -> p.name == it } }.forEach { ignored += "$member($it)" }
@@ -235,7 +237,13 @@ data class ModuleSpec(
 
         private fun fieldsValue(fields: List<Field>): Value =
             Value.VArray(
-                fields.map { obj("name" to Value.VString(it.name), "type" to Value.VString(it.type.toString()), "doc" to Value.VString(it.doc)) },
+                fields.map { field ->
+                    obj(
+                        "name" to Value.VString(field.name),
+                        "type" to Value.VString(field.type.toString()),
+                        "doc" to Value.VString(field.doc),
+                    )
+                },
             )
 
         private fun fieldsOf(value: Value?): List<Field> =

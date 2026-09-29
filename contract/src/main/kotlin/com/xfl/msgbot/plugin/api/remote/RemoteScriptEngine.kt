@@ -88,7 +88,8 @@ class RemoteScriptEngine private constructor(
             .orEngineException("'${event.name}'")
     }
 
-    override fun eval(source: String): Value = peer.request(Wire.ENGINE_EVAL, Wire.obj("source" to source), timeoutMs).orEngineException("eval")
+    override fun eval(source: String): Value =
+        peer.request(Wire.ENGINE_EVAL, Wire.obj("source" to source), timeoutMs).orEngineException("eval")
 
     override fun interrupt() = peer.notify(Wire.ENGINE_INTERRUPT)
 

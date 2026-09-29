@@ -113,7 +113,9 @@ object ValueCodec {
                 writeBytes(out, value.value.toByteArray(Charsets.UTF_8))
             }
             is Value.VBytes -> {
-                require(value.value.size <= MAX_SHARED_BYTES) { "${value.value.size} bytes are more than one value may carry ($MAX_SHARED_BYTES)" }
+                require(value.value.size <= MAX_SHARED_BYTES) {
+                    "${value.value.size} bytes are more than one value may carry ($MAX_SHARED_BYTES)"
+                }
                 val transfer = channel.offload(value.value)
                 if (transfer != null) {
                     out.writeByte(T_SHARED_BYTES)
@@ -166,7 +168,9 @@ object ValueCodec {
                 val transfer = buffer.long
                 val length = buffer.int
                 budget.sharedBytes += length
-                if (length < 0 || budget.sharedBytes > MAX_SHARED_BYTES) throw MalformedFrameException("Shared payloads of ${budget.sharedBytes} bytes")
+                if (length < 0 || budget.sharedBytes > MAX_SHARED_BYTES) {
+                    throw MalformedFrameException("Shared payloads of ${budget.sharedBytes} bytes")
+                }
                 Value.VBytes(channel.resolve(transfer, length))
             }
             T_ARRAY -> {
@@ -190,7 +194,9 @@ object ValueCodec {
         budget: Budget,
     ): Int {
         val count = buffer.int
-        if (count < 0 || count > buffer.remaining() / perItem) throw MalformedFrameException("Collection of $count items in ${buffer.remaining()} bytes")
+        if (count < 0 || count > buffer.remaining() / perItem) {
+            throw MalformedFrameException("Collection of $count items in ${buffer.remaining()} bytes")
+        }
         // Check before allocating the collection.
         if (count > MAX_VALUES - budget.values) throw MalformedFrameException("A frame holds more than $MAX_VALUES values")
         return count

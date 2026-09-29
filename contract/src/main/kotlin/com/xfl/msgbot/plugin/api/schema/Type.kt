@@ -195,7 +195,8 @@ internal fun fieldsProblem(
     for (field in declared) {
         val expected = byName[field.name]
         when {
-            expected == null && !field.optional -> return "${at(field.name)} is required, and this edition of the standard has no such $kind"
+            expected == null && !field.optional ->
+                return "${at(field.name)} is required, and this edition of the standard has no such $kind"
             expected != null && !field.type.fits(expected.type) -> return "${at(field.name)} is ${field.type}, not ${expected.type}"
         }
     }

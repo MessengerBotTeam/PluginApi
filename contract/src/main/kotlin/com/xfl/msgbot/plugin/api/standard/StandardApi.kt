@@ -106,7 +106,11 @@ object StandardApi {
     val Bot: ModuleSpec =
         moduleSpec("bot") {
             doc = "The messenger a project talks through, as far as its providers support it."
-            function("reply", returns = Type.BOOL, doc = "Answer a message. Pass its token and its address; the provider uses what it understands.") {
+            function(
+                "reply",
+                returns = Type.BOOL,
+                doc = "Answer a message. Pass its token and its address; the provider uses what it understands.",
+            ) {
                 param("text", Type.STRING)
                 optional("token", Type.STRING, doc = "The message's replyToken, meaningful to the provider that issued it")
                 optional("room", Type.STRING)
@@ -132,7 +136,11 @@ object StandardApi {
                 optional("channelId", Type.STRING)
                 optional("packageName", Type.STRING)
             }
-            function("image", returns = Type.BYTES.nullable(), doc = "The bytes behind an image token, while the provider still has them.") {
+            function(
+                "image",
+                returns = Type.BYTES.nullable(),
+                doc = "The bytes behind an image token, while the provider still has them.",
+            ) {
                 param("token", Type.STRING)
             }
 
@@ -157,7 +165,7 @@ object StandardApi {
                 optional("image", Type.STRING, doc = "An image token")
                 optional("replyToken", Type.STRING, doc = "Absent when this message cannot be answered by token")
                 optional("readToken", Type.STRING)
-                optional("extra", Type.map(Type.ANY), doc = "What only this provider knows (attachments, message type...), as it documents it.")
+                optional("extra", Type.map(Type.ANY), doc = "What only this provider knows, such as attachments or the message type.")
             }
         }
 
