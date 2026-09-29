@@ -19,18 +19,21 @@ import com.xfl.msgbot.plugin.api.rpc.RpcPeer
 import com.xfl.msgbot.plugin.api.value.Value
 import java.util.concurrent.Executor
 import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.Semaphore
 
 /**
- * The host side of an engine running in a plugin: a [ScriptEngine] like any builtin one. Calls
- * from the script are answered on [callExecutor], never on the transport thread, so a slow host
- * function cannot hold up the frames behind it.
+ * Host-side [ScriptEngine] proxy for an engine in a plugin. Host calls run on [callExecutor] so they
+ * do not block the transport thread; calls beyond [maxPendingCalls] are rejected as unavailable.
  */
 class RemoteScriptEngine private constructor(
     transport: PluginTransport,
     private val context: EngineContext,
     private val callExecutor: Executor,
     private val timeoutMs: Long,
+    maxPendingCalls: Int,
 ) : ScriptEngine {
+    private val callSlots = Semaphore(maxPendingCalls.also { require(it > 0) })
+
     private val handler =
         object : RpcHandler {
             override fun onRequest(
@@ -46,9 +49,19 @@ class RemoteScriptEngine private constructor(
                     } catch (e: Exception) {
                         return reply(CallResult.badArgs("Malformed call: ${e.message}"))
                     }
+                if (!callSlots.tryAcquire()) return reply(CallResult.unavailable("Too many host calls are waiting"))
                 try {
-                    callExecutor.execute { reply(context.host.call(call.first, call.second)) }
+                    callExecutor.execute {
+                        try {
+                            reply(context.host.call(call.first, call.second))
+                        } catch (e: Throwable) {
+                            reply(Wire.errorOf(e))
+                        } finally {
+                            callSlots.release()
+                        }
+                    }
                 } catch (_: RejectedExecutionException) {
+                    callSlots.release()
                     reply(CallResult.unavailable("The host is shutting down"))
                 }
             }
@@ -75,7 +88,10 @@ class RemoteScriptEngine private constructor(
             .orEngineException("'${event.name}'")
     }
 
-    override fun eval(source: String): Value = peer.request(Wire.ENGINE_EVAL, Wire.obj("source" to source), timeoutMs).orEngineException("eval")
+    override fun eval(source: String): Value =
+        peer.request(Wire.ENGINE_EVAL, Wire.obj("source" to source), timeoutMs).orEngineException("eval")
+
+    override fun interrupt() = peer.notify(Wire.ENGINE_INTERRUPT)
 
     override fun close() {
         peer.notify(Wire.CLOSE)
@@ -83,17 +99,15 @@ class RemoteScriptEngine private constructor(
     }
 
     companion object {
-        /**
-         * Opens the session over [transport] and checks that the plugin speaks this protocol.
-         * Throws when it does not answer or cannot; the transport is closed then.
-         */
+        /** Performs the `hello` handshake. On failure closes the transport and throws. */
         fun connect(
             transport: PluginTransport,
             context: EngineContext,
             callExecutor: Executor,
             timeoutMs: Long = 30_000,
+            maxPendingCalls: Int = 64,
         ): RemoteScriptEngine {
-            val engine = RemoteScriptEngine(transport, context, callExecutor, timeoutMs)
+            val engine = RemoteScriptEngine(transport, context, callExecutor, timeoutMs, maxPendingCalls)
             try {
                 Wire.checkHello(engine.peer.request(Wire.HELLO, Wire.hello(), Wire.HELLO_TIMEOUT_MS))
             } catch (e: Exception) {

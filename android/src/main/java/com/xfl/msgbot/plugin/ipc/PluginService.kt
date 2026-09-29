@@ -7,11 +7,12 @@ package com.xfl.msgbot.plugin.ipc
 
 import android.app.Service
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.IBinder
 import android.os.SharedMemory
+import com.xfl.msgbot.plugin.api.discovery.PluginManifestSchema
 import com.xfl.msgbot.plugin.api.discovery.PluginRole
 import com.xfl.msgbot.plugin.api.engine.ScriptEngineFactory
-import com.xfl.msgbot.plugin.api.protocol.ProtocolVersion
 import com.xfl.msgbot.plugin.api.provider.Provider
 import com.xfl.msgbot.plugin.api.remote.EngineEndpoint
 import com.xfl.msgbot.plugin.api.remote.ProviderEndpoint
@@ -19,9 +20,8 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * The one service a plugin APK exposes. Say what it contains, keyed by the IDs in its
- * `msgbot_plugin.xml`, and everything else (sessions, threads, Binder) is done here. A plugin that
- * adds Lua and a weather module, say:
+ * The service a plugin APK exposes. Subclasses map manifest IDs to factories; sessions, threads and
+ * Binder are handled here.
  *
  * ```kotlin
  * class MyPluginService : PluginService() {
@@ -30,10 +30,8 @@ import java.util.concurrent.atomic.AtomicLong
  * }
  * ```
  *
- * An APK that only ships profiles can name this class in its manifest as it is.
- *
- * Every project gets its own session, so hold no engine or provider state outside the instances
- * these factories make.
+ * A profile-only APK can use this class directly. Each project gets its own session, so keep no
+ * state outside the instances the factories create.
  */
 open class PluginService : Service() {
     protected open val engines: Map<String, ScriptEngineFactory> = emptyMap()
@@ -51,24 +49,32 @@ open class PluginService : Service() {
 
     private val binder =
         object : IPluginService.Stub() {
-            override fun protocolVersion(): Int = ProtocolVersion.CURRENT
-
             override fun open(
                 role: String,
                 component: String,
                 callback: IPluginCallback,
             ): Long {
+                // Enforced here too in case the manifest omits android:permission.
+                if (checkCallingOrSelfPermission(PluginManifestSchema.PERMISSION) != PackageManager.PERMISSION_GRANTED) {
+                    throw SecurityException("Only MessengerBotR may open plugin sessions")
+                }
                 val transport = PluginSessionTransport(callback)
                 val endpoint =
                     try {
                         when (role) {
                             PluginRole.ENGINE ->
-                                EngineEndpoint(transport, engines[component] ?: throw IllegalArgumentException("This plugin has no engine '$component'"))
+                                EngineEndpoint(
+                                    transport,
+                                    engines[component] ?: throw IllegalArgumentException("This plugin has no engine '$component'"),
+                                )
                             PluginRole.PROVIDER ->
-                                ProviderEndpoint(transport, providers[component] ?: throw IllegalArgumentException("This plugin has no provider '$component'"))
+                                ProviderEndpoint(
+                                    transport,
+                                    providers[component] ?: throw IllegalArgumentException("This plugin has no provider '$component'"),
+                                )
                             else -> throw IllegalArgumentException("Unknown role '$role'")
                         }
-                    } catch (e: Exception) {
+                    } catch (e: Throwable) {
                         transport.close()
                         throw e
                     }

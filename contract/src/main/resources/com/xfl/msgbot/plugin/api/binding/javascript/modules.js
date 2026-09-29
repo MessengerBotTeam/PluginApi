@@ -2,11 +2,8 @@
  * MessengerBotR JavaScript binding: CommonJS modules over a project's sources.
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Evaluates to function (sources, compile, fallback) -> makeRequire(fromPath).
- * Written in ES5 so every JavaScript engine can run it unchanged.
- *
- * Besides the project's own files it serves the binding's builtin modules (require('msgbot')),
- * so every engine that uses this loader offers them without doing anything.
+ * Evaluates to function (sources, compile, fallback) -> makeRequire(fromPath). Also serves the
+ * builtin modules such as require('msgbot'). ES5 so every JavaScript engine can run it.
  */
 (function (sources, compile, fallback) {
     'use strict';
@@ -36,7 +33,7 @@
         return slash < 0 ? '' : path.substring(0, slash);
     }
 
-    // null: neither a project path nor a builtin, so the runtime's own require may know it.
+    // null means neither a project path nor a builtin; defer to fallback.
     function resolve(specifier, from) {
         var relative = specifier.indexOf('./') === 0 || specifier.indexOf('../') === 0;
         if (!relative && specifier.charAt(0) !== '/') return has.call(builtins, specifier) ? BUILTIN + specifier : null;

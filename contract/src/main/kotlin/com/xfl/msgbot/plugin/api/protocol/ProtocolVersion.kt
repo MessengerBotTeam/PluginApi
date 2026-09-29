@@ -5,13 +5,30 @@
 
 package com.xfl.msgbot.plugin.api.protocol
 
-/** The wire protocol between host and plugin, checked on binding and again in the `hello` exchange. */
+/**
+ * Host-plugin wire protocol version. Each side supports [MIN_SUPPORTED]..[CURRENT]; the host sends
+ * its range in `hello` and the plugin picks the newest common version.
+ *
+ * 0 means unreleased; anything may change.
+ */
 object ProtocolVersion {
-    /** 4: one symmetric RPC for every role, schema-described modules, named arguments. */
-    const val CURRENT: Int = 4
+    const val CURRENT: Int = 0
 
-    /** Oldest plugin protocol this host still accepts. Widen instead of bumping [CURRENT] lockstep. */
-    const val MIN_SUPPORTED: Int = 4
+    /** Lower this rather than raising it in lockstep with [CURRENT]. */
+    const val MIN_SUPPORTED: Int = 0
 
-    fun isCompatible(pluginProtocol: Int): Boolean = pluginProtocol in MIN_SUPPORTED..CURRENT
+    /** Newest version shared with [otherMin]..[otherMax], or null. */
+    fun negotiate(
+        otherMin: Int,
+        otherMax: Int,
+    ): Int? {
+        val newest = minOf(CURRENT, otherMax)
+        return newest.takeIf { it >= maxOf(MIN_SUPPORTED, otherMin) }
+    }
+
+    /**
+     * Pre-bind check on a manifest's newest protocol [declared]. Only rejects plugins older than
+     * [MIN_SUPPORTED]; newer ones may still speak ours, which `hello` decides.
+     */
+    fun mayBeCompatible(declared: Int): Boolean = declared >= MIN_SUPPORTED
 }

@@ -69,13 +69,19 @@ globalThis.onMessage = (handler) => events.on('bot.message', (m) => handler({
 | `VArray` | `Array` (`undefined` 원소는 `null`) | `Array` |
 | `VObject` | 평범한 객체 (`undefined`인 속성은 뺀다) | 평범한 객체 |
 
-함수, 심볼, 클래스 인스턴스 같은 다른 값은 넘길 수 없다. 이런 값을 넘기면 `__host_call`과 `__host_call_async` 모두 호출한 자리에서 `TypeError`를 던지며, 호스트에는 아무것도 전달되지 않는다.
+함수, 심볼, 클래스 인스턴스 같은 다른 값은 넘길 수 없다. 자기 자신을 가리키는 객체나 배열, 64단계보다 깊게 중첩된 값도 넘길 수 없다. 이런 값을 넘기면 `__host_call`과 `__host_call_async` 모두 호출한 자리에서 `TypeError`를 던지며, 호스트에는 아무것도 전달되지 않는다.
 
 ## 오류
 
 호스트가 `CallResult.Err`로 답하면 `__host_call`은 `Error`를 던진다. `__host_call_async`는 같은 `Error`로 reject한다. 이 `Error`의 `code`에는 `bad_args`나 `unknown_function` 같은 오류 코드가, `message`에는 호스트의 설명이 들어간다.
 
 스크립트를 로드하지 못하면 `EngineException`을 던진다. 이때 메시지에 파일 이름을 넣는다(예: `main.js:3: Unexpected token`). 아무도 기다리지 않는 작업에서 난 오류는 `EngineContext.reportError`로 보고한다. 타이머 콜백이나 처리되지 않은 Promise 거부가 여기에 해당한다.
+
+끝없는 재귀도 `EngineException`으로 끝난다. 스택 오버플로 같은 `Error`가 엔진 밖으로 나가면 호스트 프로세스가 죽기 때문이다. 엔진은 계속 쓸 수 있어야 한다.
+
+## 중단
+
+`ScriptEngine.interrupt()`는 엔진 스레드가 아닌 다른 스레드에서 불린다. 그때 로드, 이벤트, eval 중에 돌고 있는 스크립트(`while (true) {}`)를 곧 멈추고, 그 호출은 `EngineException`으로 끝난다. 아무것도 돌지 않을 때 불리면 아무 일도 하지 않고, 다음 실행에 영향을 주지 않는다. 호스트는 스크립트가 제한 시간을 넘기거나 바쁜 엔진을 닫을 때 이것을 부른다.
 
 ## 이벤트 구독
 

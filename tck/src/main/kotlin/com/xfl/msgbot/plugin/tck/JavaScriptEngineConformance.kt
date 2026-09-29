@@ -21,25 +21,19 @@ import com.xfl.msgbot.plugin.api.value.vObject
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * What every JavaScript engine must do, as tests. Extend it in the engine's own test sources:
- *
- * ```kotlin
- * class MyEngineConformanceTest : JavaScriptEngineConformance() {
- *     override fun createEngine(context: EngineContext) = MyEngine(context)
- * }
- * ```
- *
- * Passing it is what lets any JavaScript profile run on the engine unchanged: the same values,
- * errors, events, timers, promises and modules, whoever wrote the runtime underneath. The binding
- * it checks is written out in PluginApi's docs/bindings/javascript.md.
+ * Conformance tests for the JavaScript binding (docs/bindings/javascript.md). Subclass it in an
+ * engine's test sources and implement [createEngine].
  */
 abstract class JavaScriptEngineConformance {
-    /** The engine under test. Called on the engine thread. */
+    /** Called on the engine thread. */
     protected abstract fun createEngine(context: EngineContext): ScriptEngine
 
     protected lateinit var harness: EngineHarness
@@ -279,10 +273,6 @@ abstract class JavaScriptEngineConformance {
         assertEquals(listOf(Value.VArray(emptyList()), Value.VArray(listOf(Value.VString("tck.ping")))), listened)
     }
 
-    /**
-     * A profile shaped nothing like the app's own: one function per event, Promises throughout.
-     * That it runs on the kit alone is what lets anyone ship a new JavaScript API as a plugin.
-     */
     @Test
     fun aProfileOfAnyShapeRunsOnTheKitAlone() {
         load(
@@ -305,6 +295,49 @@ abstract class JavaScriptEngineConformance {
 
         assertTrue(harness.awaitUntil { eval("answered") == Value.VInt(42) })
         assertEquals(listOf<Value?>(Value.VInt(42)), harness.calls.filter { it.function == "tck.echo" }.map { it.args["value"] })
+    }
+
+    @Test
+    fun anInterruptStopsAScriptThatNeverReturnsAndTheEngineKeepsWorking() {
+        load("function spin() { while (true) {} }")
+        val running = harness.onEngineAsync { harness.engine.eval("spin()") }
+        Thread.sleep(200)
+        assertFalse(running.isDone, "the script is still spinning")
+        harness.interrupt()
+        val stopped = assertFailsWith<ExecutionException> { running.get(10, TimeUnit.SECONDS) }
+        assertTrue(stopped.cause is EngineException, "an interrupted script fails as an EngineException: ${stopped.cause}")
+        assertEquals(Value.VInt(2), eval("1 + 1"))
+    }
+
+    @Test
+    fun anInterruptWhileNothingRunsDoesNotStopTheNextScript() {
+        load("var n = 0; for (var i = 0; i < 100000; i++) n++;")
+        harness.interrupt()
+        assertEquals(Value.VInt(100000), eval("var m = 0; for (var j = 0; j < 100000; j++) m++; m"))
+    }
+
+    @Test
+    fun runawayRecursionFailsAsAnEngineExceptionAndTheEngineKeepsWorking() {
+        load("function down(n) { return down(n + 1) + 1; } function viaHost() { [1].forEach(viaHost); }")
+        assertFailsWith<EngineException> { eval("down(0)") }
+        assertFailsWith<EngineException> { eval("viaHost()") }
+        assertEquals(Value.VInt(2), eval("1 + 1"))
+    }
+
+    @Test
+    fun valuesThatCycleOrNestTooDeeplyAreRefusedWhereTheyArePassed() {
+        load(
+            """
+            var cycle = {}; cycle.self = cycle;
+            var deep = {}; for (var i = 0, d = deep; i < 100; i++) d = d.next = {};
+            var refused = [];
+            [cycle, deep].forEach(function (v) {
+                try { __host_call('tck.echo', { value: v }); refused.push(false); } catch (e) { refused.push(e instanceof TypeError); }
+            });
+            """.trimIndent(),
+        )
+        assertEquals(Value.VString("true,true"), eval("refused.join(',')"))
+        assertTrue(harness.calls.isEmpty(), "the host never saw them: ${harness.calls}")
     }
 
     @Test

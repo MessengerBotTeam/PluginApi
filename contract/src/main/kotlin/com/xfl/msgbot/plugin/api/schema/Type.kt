@@ -8,18 +8,13 @@ package com.xfl.msgbot.plugin.api.schema
 import com.xfl.msgbot.plugin.api.value.Value
 
 /**
- * The type of a parameter, a return value or an event field. Written and read as a short text
- * form so a schema is as legible in a shim or an error message as it is here:
+ * Type of a parameter, return value or event field, with a text form such as
+ * `string`, `int?`, `list<string>`, `map<int>`, `{status: int, body: string?}`.
  *
- * ```
- * string   int?   list<string>   map<int>   {status: int, body: string?}
- * ```
- *
- * `T?` is the only way to say "optional": an absent argument or field and a null one are the
- * same thing, because most languages cannot tell them apart.
+ * `T?` means optional. Absent and null are treated the same, since most languages cannot tell them apart.
  */
 sealed interface Type {
-    /** Why [value] is not of this type, or null when it is. [path] names the value in the answer. */
+    /** Returns an error message naming [path] if [value] does not match, or null. */
     fun check(value: Value, path: String = "value"): String?
 
     enum class Primitive(val keyword: String) : Type {
@@ -30,7 +25,7 @@ sealed interface Type {
         STRING("string"),
         BYTES("bytes"),
 
-        /** Returns nothing; the answer is null. */
+        /** No result; the value is null. */
         VOID("void"),
         ;
 
@@ -40,7 +35,7 @@ sealed interface Type {
                     ANY -> true
                     BOOL -> value is Value.VBool
                     INT -> value is Value.VInt
-                    // A whole number is an int on every binding's way in; it is still a double here.
+                    // Bindings decode whole numbers as int, so accept them as double.
                     DOUBLE -> value is Value.VDouble || value is Value.VInt
                     STRING -> value is Value.VString
                     BYTES -> value is Value.VBytes
@@ -72,7 +67,6 @@ sealed interface Type {
         override fun toString(): String = "list<$item>"
     }
 
-    /** String keys, values of one type. */
     data class MapOf(val value: Type) : Type {
         override fun check(value: Value, path: String): String? {
             if (value !is Value.VObject) return mismatch(path, this, value)
@@ -83,7 +77,7 @@ sealed interface Type {
         override fun toString(): String = "map<$value>"
     }
 
-    /** A fixed set of named fields. A field the schema does not name is refused: it is usually a typo. */
+    /** Unknown fields are rejected, since they are usually typos. */
     data class Struct(val fields: List<Field>) : Type {
         init {
             val duplicate = fields.groupBy { it.name }.filterValues { it.size > 1 }.keys
@@ -113,7 +107,7 @@ sealed interface Type {
 
         fun struct(vararg fields: Field): Type = Struct(fields.toList())
 
-        /** Reads the text form back. Throws [IllegalArgumentException] naming where it went wrong. */
+        /** Parses the text form. Throws [IllegalArgumentException] with the error position. */
         fun parse(text: String): Type = TypeParser(text).parseAll()
 
         internal fun checkFields(
@@ -152,9 +146,8 @@ sealed interface Type {
 }
 
 /**
- * A named slot: a function parameter or a struct/event field. Optional exactly when its type is
- * `T?` or `any`. Two fields are equal when name and type are; [doc] is commentary and does not
- * survive the text form of a nested struct.
+ * A function parameter or struct/event field. Optional when its type is `T?` or `any`. Equality
+ * ignores [doc], which the text form of a nested struct does not carry.
  */
 class Field(
     val name: String,
@@ -177,9 +170,8 @@ class Field(
 fun Type.nullable(): Type = if (this is Type.Nullable) this else Type.Nullable(this)
 
 /**
- * Whether this type, as a provider built against another edition of a standard declares it, can
- * stand for [standard]'s. The same type, except that a struct may lack optional fields the
- * standard added later, or carry optional ones this edition does not know yet.
+ * Whether a provider's type from another standard edition is compatible with [standard]: equal,
+ * except structs may add or omit optional fields.
  */
 internal fun Type.fits(standard: Type): Boolean =
     when {
@@ -191,10 +183,7 @@ internal fun Type.fits(standard: Type): Boolean =
         else -> false
     }
 
-/**
- * Why [declared] cannot stand for [standard] as the fields of [member], or null when it can: shared
- * fields fit, and a field only one side has is optional there.
- */
+/** Returns why [declared] is incompatible with [standard], or null. A field on only one side must be optional there. */
 internal fun fieldsProblem(
     member: String,
     kind: String,
@@ -206,7 +195,8 @@ internal fun fieldsProblem(
     for (field in declared) {
         val expected = byName[field.name]
         when {
-            expected == null && !field.optional -> return "${at(field.name)} is required, and this edition of the standard has no such $kind"
+            expected == null && !field.optional ->
+                return "${at(field.name)} is required, and this edition of the standard has no such $kind"
             expected != null && !field.type.fits(expected.type) -> return "${at(field.name)} is ${field.type}, not ${expected.type}"
         }
     }
@@ -215,7 +205,7 @@ internal fun fieldsProblem(
     return null
 }
 
-/** [value] without the struct fields this type does not name, at any depth: a newer edition's additions. */
+/** Drops struct fields this type does not declare, at any depth. */
 fun Type.conform(value: Value): Value =
     when {
         value is Value.VNull -> value
@@ -234,10 +224,13 @@ internal fun conformFields(
     return entries.filterKeys { it in known }.mapValues { (name, v) -> known.getValue(name).type.conform(v) }
 }
 
+/** Input comes from other apps, so length and nesting are bounded. */
 private class TypeParser(private val text: String) {
     private var pos = 0
+    private var depth = 0
 
     fun parseAll(): Type {
+        if (text.length > MAX_LENGTH) fail("longer than $MAX_LENGTH characters")
         val type = parseType()
         skipSpace()
         if (pos != text.length) fail("unexpected '${text[pos]}'")
@@ -245,6 +238,7 @@ private class TypeParser(private val text: String) {
     }
 
     private fun parseType(): Type {
+        if (++depth > MAX_DEPTH) fail("nested deeper than $MAX_DEPTH")
         skipSpace()
         val base =
             if (peek() == '{') {
@@ -257,6 +251,7 @@ private class TypeParser(private val text: String) {
                 }
             }
         skipSpace()
+        depth--
         return if (peek() == '?') {
             pos++
             Type.Nullable(base)
@@ -317,5 +312,10 @@ private class TypeParser(private val text: String) {
         while (pos < text.length && text[pos].isWhitespace()) pos++
     }
 
-    private fun fail(message: String): Nothing = throw IllegalArgumentException("Bad type '$text' at $pos: $message")
+    private fun fail(message: String): Nothing = throw IllegalArgumentException("Bad type '${text.take(80)}' at $pos: $message")
+
+    private companion object {
+        const val MAX_LENGTH = 4096
+        const val MAX_DEPTH = 32
+    }
 }

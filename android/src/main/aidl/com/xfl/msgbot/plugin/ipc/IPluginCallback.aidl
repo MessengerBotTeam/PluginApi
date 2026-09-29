@@ -3,7 +3,7 @@ package com.xfl.msgbot.plugin.ipc;
 
 import android.os.SharedMemory;
 
-// Plugin -> host, for one session. oneway: never blocks the plugin.
+// Plugin -> host, per session. oneway so the plugin never blocks.
 interface IPluginCallback {
     oneway void onFrame(in byte[] frame);
 

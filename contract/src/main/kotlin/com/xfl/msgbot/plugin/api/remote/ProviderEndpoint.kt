@@ -21,14 +21,14 @@ import com.xfl.msgbot.plugin.api.rpc.RpcHandler
 import com.xfl.msgbot.plugin.api.rpc.RpcPeer
 import com.xfl.msgbot.plugin.api.value.Value
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * The plugin side of a provider session: creates the [Provider] and runs it, its handlers
- * included, on one thread. [com.xfl.msgbot.plugin.ipc.PluginService] makes one per session.
+ * Plugin side of a provider session: creates the [Provider] and runs it on one thread. Created per
+ * session by [com.xfl.msgbot.plugin.ipc.PluginService].
  *
- * An event is checked against the provider's own spec before it leaves, so a mistake shows up as
- * an exception at the `emit` that made it, not as a silent drop on the host.
+ * Validates emitted events locally so `emit` throws at the call site instead of the host dropping them.
  */
 class ProviderEndpoint(
     transport: PluginTransport,
@@ -39,7 +39,7 @@ class ProviderEndpoint(
 
     @Volatile private var provider: Provider? = null
 
-    // Read once the provider exists; every request is queued behind its creation.
+    // Safe to read from requests: they are queued behind provider creation.
     @Volatile private var modules: Map<String, ProviderModule> = emptyMap()
 
     @Volatile private var startupFailure: String? = null
@@ -75,7 +75,7 @@ class ProviderEndpoint(
                 reply: (CallResult) -> Unit,
             ) {
                 when (method) {
-                    Wire.HELLO -> onProvider(reply) { Wire.hello(modules.values.map { it.spec }) }
+                    Wire.HELLO -> onProvider(reply) { Wire.answerHello(params) { modules.values.map { it.spec } }.getOrThrow() }
                     Wire.PROVIDER_START -> {
                         val projects = Wire.projectsOf(params.map()["projects"])
                         onProvider(reply) { provider ->
@@ -96,9 +96,11 @@ class ProviderEndpoint(
                             try {
                                 val map = params.map()
                                 val project = map.string("project")
-                                val (namespace, name) = Names.split(map.string("function")) ?: throw IllegalArgumentException("unqualified function")
+                                val (namespace, name) =
+                                    Names.split(map.string("function")) ?: throw IllegalArgumentException("unqualified function")
                                 val module = modules[namespace] ?: return reply(CallResult.unknownFunction(map.string("function")))
-                                module to ProviderCall(project, name, Args(map.getValue("args").map()), running?.projects?.get(project).orEmpty())
+                                val options = running?.projects?.get(project).orEmpty()
+                                module to ProviderCall(project, name, Args(map.getValue("args").map()), options)
                             } catch (e: Exception) {
                                 return reply(CallResult.badArgs("Malformed call: ${e.message}"))
                             }
@@ -123,7 +125,7 @@ class ProviderEndpoint(
             constructed.await()
             try {
                 provider = factory().also { modules = it.modulesByNamespace() }
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 startupFailure = "The provider could not start: ${e.message ?: e.javaClass.simpleName}"
                 reportError(startupFailure!!)
             }
@@ -145,35 +147,42 @@ class ProviderEndpoint(
 
     private fun reportError(message: String) = peer.notify(Wire.PROVIDER_ERROR, Wire.obj("message" to message))
 
+    /** Catches Throwable so every request gets a reply. */
     private fun onProvider(
         reply: (CallResult) -> Unit,
         block: (Provider) -> Value,
     ) {
-        if (thread.isShutdown) return reply(CallResult.unavailable("The provider session is closed"))
-        thread.execute {
-            val result =
-                if (closed.get()) {
-                    CallResult.unavailable("The provider session is closed")
-                } else {
-                    try {
-                        val provider = provider ?: throw IllegalStateException(startupFailure ?: "The provider is not running")
-                        CallResult.ok(block(provider))
-                    } catch (e: Exception) {
-                        Wire.errorOf(e)
+        try {
+            thread.execute {
+                val result =
+                    if (closed.get()) {
+                        CallResult.unavailable("The provider session is closed")
+                    } else {
+                        try {
+                            val provider = provider ?: throw IllegalStateException(startupFailure ?: "The provider is not running")
+                            CallResult.ok(block(provider))
+                        } catch (e: Throwable) {
+                            Wire.errorOf(e)
+                        }
                     }
-                }
-            reply(result)
+                reply(result)
+            }
+        } catch (_: RejectedExecutionException) {
+            reply(CallResult.unavailable("The provider session is closed"))
         }
     }
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         peer.close()
-        thread.execute {
-            provider?.let { provider ->
-                runCatching { stopRunning(provider) }
-                runCatching { provider.close() }
+        try {
+            thread.execute {
+                provider?.let { provider ->
+                    runCatching { stopRunning(provider) }
+                    runCatching { provider.close() }
+                }
             }
+        } catch (_: RejectedExecutionException) {
         }
         thread.shutdown()
     }

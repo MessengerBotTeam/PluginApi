@@ -18,10 +18,7 @@ import com.xfl.msgbot.plugin.api.value.asLongOrNull
 import com.xfl.msgbot.plugin.api.value.asObjectOrNull
 import com.xfl.msgbot.plugin.api.value.asStringOrNull
 
-/**
- * The methods each role speaks over [com.xfl.msgbot.plugin.api.rpc.RpcPeer], and how their
- * parameters are spelled. Both ends are in this package, so the spelling lives in one place.
- */
+/** RPC method names and parameter encoding shared by both ends. */
 internal object Wire {
     // Every role.
     const val HELLO = "hello"
@@ -31,6 +28,9 @@ internal object Wire {
     const val ENGINE_LOAD = "engine.load"
     const val ENGINE_DISPATCH = "engine.dispatch"
     const val ENGINE_EVAL = "engine.eval"
+
+    /** A notification, so it is not queued behind the busy request it stops. */
+    const val ENGINE_INTERRUPT = "engine.interrupt"
 
     // Engine role: plugin -> host.
     const val HOST_CALL = "host.call"
@@ -49,14 +49,32 @@ internal object Wire {
 
     fun obj(vararg fields: Pair<String, Any?>): Value.VObject = Value.VObject(fields.associate { (k, v) -> k to Value.of(v) })
 
-    fun hello(modules: List<ModuleSpec> = emptyList()): Value = obj("protocol" to ProtocolVersion.CURRENT, "modules" to modules.map { it.toValue() })
+    /** Host's opening request: its protocol range. */
+    fun hello(): Value = obj("protocol" to ProtocolVersion.CURRENT, "minProtocol" to ProtocolVersion.MIN_SUPPORTED)
 
-    /** The protocol a hello answer names; refuses one this side cannot speak. */
+    /** Plugin's reply to [hello]: agreed protocol and, for a provider, its [modules]. Unavailable if ranges do not overlap. */
+    fun answerHello(
+        params: Value,
+        modules: () -> List<ModuleSpec> = { emptyList() },
+    ): CallResult {
+        val offer = params.asObjectOrNull().orEmpty()
+        val hostMax = offer["protocol"]?.asLongOrNull()?.toInt() ?: return CallResult.badArgs("The host named no protocol")
+        val hostMin = offer["minProtocol"]?.asLongOrNull()?.toInt() ?: hostMax
+        val agreed =
+            ProtocolVersion.negotiate(hostMin, hostMax)
+                ?: return CallResult.unavailable(
+                    "This plugin speaks protocol ${ProtocolVersion.MIN_SUPPORTED}..${ProtocolVersion.CURRENT}; " +
+                        "the host speaks $hostMin..$hostMax",
+                )
+        return CallResult.ok(obj("protocol" to agreed, "modules" to modules().map { it.toValue() }))
+    }
+
+    /** Validates the plugin's [hello] reply. */
     fun checkHello(answer: CallResult): Map<String, Value> {
         val map = answer.getOrThrow().asObjectOrNull() ?: throw IllegalStateException("The plugin answered hello with nothing")
-        val protocol = map["protocol"]?.asLongOrNull()?.toInt() ?: 0
-        check(ProtocolVersion.isCompatible(protocol)) {
-            "The plugin speaks protocol $protocol; this side speaks ${ProtocolVersion.MIN_SUPPORTED}..${ProtocolVersion.CURRENT}"
+        val protocol = map["protocol"]?.asLongOrNull()?.toInt() ?: throw IllegalStateException("The plugin named no protocol")
+        check(protocol in ProtocolVersion.MIN_SUPPORTED..ProtocolVersion.CURRENT) {
+            "The plugin chose protocol $protocol; this side speaks ${ProtocolVersion.MIN_SUPPORTED}..${ProtocolVersion.CURRENT}"
         }
         return map
     }
@@ -79,7 +97,10 @@ internal object Wire {
             api = map.getValue("api").list().map(ModuleSpec::fromValue),
             profile = ProfileScript(profile.string("name"), profile.string("source")),
             entry = map.string("entry"),
-            sources = map.getValue("sources").map().mapValues { (_, v) -> v.asStringOrNull() ?: throw IllegalArgumentException("A source is text") },
+            sources =
+                map.getValue("sources").map().mapValues { (_, v) ->
+                    v.asStringOrNull() ?: throw IllegalArgumentException("A source is text")
+                },
             options = map["options"]?.map()?.mapValues { (_, v) -> v.asStringOrNull().orEmpty() }.orEmpty(),
         )
     }
@@ -95,7 +116,6 @@ internal object Wire {
 
     fun Map<String, Value>.string(key: String): String = this[key]?.asStringOrNull() ?: throw IllegalArgumentException("'$key' is missing")
 
-    /** The value, or the failure as an [EngineException] a compile or dispatch can show. */
     fun CallResult.orEngineException(what: String): Value =
         when (this) {
             is CallResult.Ok -> value
@@ -105,6 +125,8 @@ internal object Wire {
     fun errorOf(e: Throwable): CallResult =
         when (e) {
             is CallException -> CallResult.Err(e.code, e.message ?: e.code)
+            is StackOverflowError -> CallResult.failed("Stack overflow: the script recursed too deeply")
+            is OutOfMemoryError -> CallResult.failed("Out of memory: ${e.message ?: "the script used more than there is"}")
             else -> CallResult.failed(e.message ?: e.javaClass.simpleName)
         }
 }

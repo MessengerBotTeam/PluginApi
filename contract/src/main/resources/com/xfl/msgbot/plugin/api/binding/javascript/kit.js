@@ -2,17 +2,7 @@
  * MessengerBotR JavaScript binding: the profile kit, require('msgbot').
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Everything a JavaScript profile needs that is not a matter of taste, so a profile keeps only
- * the shape of its own API:
- *
- *   api        every module in __api, as functions; positional arguments take the schema's
- *              names, one plain object passes them by name, fn.async(...) returns a Promise
- *   events     listeners by qualified name; the host is told what to deliver (sys.listen)
- *   onError    where a failing listener goes; the project log by default
- *   base64     bytes (Uint8Array) as base64
- *
- * Requiring it installs __dispatch, so a profile that only uses events.on needs nothing else.
- * Written in ES5 so every JavaScript engine runs it unchanged.
+ * Requiring it installs __dispatch. ES5 so every JavaScript engine can run it.
  */
 'use strict';
 
@@ -47,8 +37,7 @@ function isPlainObject(v) {
     return proto === Object.prototype || proto === null;
 }
 
-// Positional arguments take the schema's names in order. A single plain object passes them by
-// name, unless the first parameter itself takes an object.
+// A single plain object is named arguments, unless the first parameter itself takes an object.
 function argsFor(qualified, fn, values) {
     var first = fn.params.length ? fn.params[0].type.replace(/\?$/, '') : '';
     var takesObject = first === 'any' || first.indexOf('map<') === 0 || first.charAt(0) === '{';
@@ -76,7 +65,6 @@ var api = Object.create(null);
 Object.keys(specs).forEach(function (namespace) { api[namespace] = makeModule(specs[namespace]); });
 Object.freeze(api);
 
-// Listeners by qualified event name. The host delivers only what someone listens to.
 var listeners = Object.create(null);
 var canListen = functionSpec('sys.listen') !== null;
 
@@ -88,14 +76,13 @@ function tellHost() {
 var kit = {
     api: api,
 
-    /** Whether the project has this function or event ('weather.forecast', 'bot.message'). */
+    /** Whether the project has this qualified function or event. */
     isAvailable: function (qualified) { return functionSpec(qualified) !== null || eventSpec(qualified) !== null; },
 
-    /** The module spec for a namespace, as __api has it, or null. */
     spec: function (namespace) { return specs[namespace] || null; },
 
     events: {
-        /** Listens to a qualified event; throws when the project can never deliver it. */
+        /** Throws if the project can never deliver the event. */
         on: function (name, fn) {
             name = String(name);
             if (!eventSpec(name)) throw new Error("Event '" + name + "' is never delivered to this project; check its providers.");
@@ -122,7 +109,7 @@ var kit = {
         count: function (name) { return (listeners[name] || []).length; }
     },
 
-    /** Calls every listener of an event; one that throws goes to onError and the rest still run. */
+    /** A throwing listener goes to onError; the rest still run. */
     dispatch: function (name, payload) {
         var fns = (listeners[name] || []).slice();
         for (var i = 0; i < fns.length; i++) {
@@ -137,14 +124,14 @@ var kit = {
         }
     },
 
-    /** Replace to route listener failures elsewhere. */
+    /** Replaceable. Defaults to the project log. */
     onError: function (error, eventName) {
         var message = 'listener of ' + eventName + ' failed: ' + kit.describe(error);
         if (functionSpec('log.write')) __host_call('log.write', { level: 'error', message: message, tag: 'profile' });
         else throw error;
     },
 
-    /** An error as one string, message and stack once each, whichever engine made it. */
+    /** Message plus stack, without repeating the message on engines whose stack includes it. */
     describe: function (error) {
         var text = String(error);
         var stack = error && error.stack;
@@ -164,7 +151,7 @@ var kit = {
     }
 };
 
-// Nothing is delivered until someone listens; a profile that never requires the kit gets everything.
+// Without sys.listen the host delivers every event; this call narrows it to none until a listener registers.
 tellHost();
 globalThis.__dispatch = function (name, payload) { kit.dispatch(name, payload); };
 

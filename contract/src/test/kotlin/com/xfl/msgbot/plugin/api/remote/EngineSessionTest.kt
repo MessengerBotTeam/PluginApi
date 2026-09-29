@@ -11,9 +11,11 @@ import com.xfl.msgbot.plugin.api.engine.ProfileScript
 import com.xfl.msgbot.plugin.api.engine.ScriptEngine
 import com.xfl.msgbot.plugin.api.engine.ScriptEngineFactory
 import com.xfl.msgbot.plugin.api.engine.ScriptEvent
+import com.xfl.msgbot.plugin.api.protocol.ProtocolVersion
 import com.xfl.msgbot.plugin.api.rpc.LoopbackTransport
 import com.xfl.msgbot.plugin.api.standard.StandardApi
 import com.xfl.msgbot.plugin.api.value.Value
+import com.xfl.msgbot.plugin.api.value.asObjectOrNull
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -24,10 +26,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
-/**
- * A remote engine behaves like a local one: same requests in, same host calls out. The engine is
- * a language the contract has never heard of, as a plugin's would be.
- */
 class EngineSessionTest {
     private val hostCalls = CopyOnWriteArrayList<Pair<String, Map<String, Value>>>()
     private val errors = CopyOnWriteArrayList<String>()
@@ -70,7 +68,7 @@ class EngineSessionTest {
             }
         }
 
-    /** Stands in for a plugin's language: understands a few commands in place of real source. */
+    /** Interprets a few fixed commands instead of real source. */
     private class FakeEngine(private val context: EngineContext) : ScriptEngine {
         var loaded: LoadRequest? = null
         val seen = CopyOnWriteArrayList<String>()
@@ -90,7 +88,22 @@ class EngineSessionTest {
                         seen += "async answered on ${Thread.currentThread().name}: $result"
                     }
                 "test.throw" -> throw EngineException("handler threw")
+                "test.overflow" -> throw StackOverflowError()
+                "test.spin" -> {
+                    spinning = true
+                    while (!interrupted) Thread.onSpinWait()
+                    interrupted = false
+                    throw EngineException("interrupted")
+                }
             }
+        }
+
+        @Volatile var spinning = false
+
+        @Volatile var interrupted = false
+
+        override fun interrupt() {
+            if (spinning) interrupted = true
         }
 
         override fun eval(source: String): Value =
@@ -196,5 +209,40 @@ class EngineSessionTest {
         val deadline = System.currentTimeMillis() + 5_000
         while (errors.isEmpty() && System.currentTimeMillis() < deadline) Thread.sleep(10)
         assertTrue(errors.single().contains("no native library"))
+    }
+
+    @Test
+    fun `a handler's Error fails the dispatch and gives its queue slot back`() {
+        val engine = connect()
+        engine.load(request)
+        // Twice the queue size, so a leaked slot would reject a later dispatch.
+        repeat(4) {
+            val e = assertFailsWith<EngineException> { engine.dispatch(ScriptEvent("test.overflow")) }
+            assertTrue(e.message!!.contains("Stack overflow"), e.message)
+        }
+    }
+
+    @Test
+    fun `an interrupt overtakes the queue and stops the running script`() {
+        val engine = connect()
+        engine.load(request)
+        val failure = java.util.concurrent.CompletableFuture<Throwable?>()
+        Thread { failure.complete(runCatching { engine.dispatch(ScriptEvent("test.spin")) }.exceptionOrNull()) }.start()
+        Thread.sleep(200)
+        assertTrue(!failure.isDone, "still spinning")
+        engine.interrupt()
+        val e = failure.get(5, TimeUnit.SECONDS)
+        assertTrue(e is EngineException && e.message!!.contains("interrupted"), "$e")
+        engine.load(request)
+    }
+
+    @Test
+    fun `the two sides agree on the newest protocol both speak`() {
+        val offer = { min: Int, max: Int -> Value.of(mapOf("protocol" to max, "minProtocol" to min)) }
+        val agreed = Wire.answerHello(offer(ProtocolVersion.MIN_SUPPORTED, ProtocolVersion.CURRENT + 5))
+        assertEquals(Value.VInt(ProtocolVersion.CURRENT.toLong()), agreed.getOrThrow().asObjectOrNull()!!["protocol"])
+        val tooNew = Wire.answerHello(offer(ProtocolVersion.CURRENT + 1, ProtocolVersion.CURRENT + 5))
+        assertEquals("unavailable", (tooNew as CallResult.Err).code)
+        assertFailsWith<IllegalStateException> { Wire.checkHello(CallResult.ok(Value.of(mapOf("protocol" to ProtocolVersion.CURRENT + 1)))) }
     }
 }

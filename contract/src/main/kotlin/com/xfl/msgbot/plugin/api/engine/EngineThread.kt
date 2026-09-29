@@ -5,15 +5,18 @@
 
 package com.xfl.msgbot.plugin.api.engine
 
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executor
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
 /**
- * The single thread an engine lives on, usable as its [EngineScheduler] and as a plain [Executor].
- * Work posted after [shutdown] is dropped rather than thrown back at the caller, and scheduled
- * work dies with the thread, so a closed engine never hears from a timer again.
+ * An engine's single thread, usable as its [EngineScheduler] and as an [Executor].
+ *
+ * After shutdown, [execute] throws (so a coroutine dispatcher fails instead of hanging), [submit]
+ * futures fail, and [post]/[schedule] silently drop the task.
  */
 class EngineThread(
     name: String,
@@ -26,6 +29,9 @@ class EngineThread(
             continueExistingPeriodicTasksAfterShutdownPolicy = false
         }
 
+    /** Unrun [submit] futures; [shutdownNow] fails them. */
+    private val pending = ConcurrentHashMap.newKeySet<CompletableFuture<*>>()
+
     @Volatile private var thread: Thread? = null
 
     init {
@@ -36,15 +42,41 @@ class EngineThread(
 
     val isShutdown: Boolean get() = executor.isShutdown
 
-    override fun execute(command: Runnable) {
+    /** Throws [RejectedExecutionException] once the thread is shut down. */
+    override fun execute(command: Runnable) = executor.execute(command)
+
+    /**
+     * Runs [block] on this thread. The future fails with [RejectedExecutionException] if the thread
+     * shuts down first; cancelling it before it runs skips the block.
+     */
+    fun <T> submit(block: () -> T): CompletableFuture<T> {
+        val result = CompletableFuture<T>()
+        pending += result
         try {
-            executor.execute(command)
-        } catch (_: RejectedExecutionException) {
-            // Shut down; nothing left to run it against.
+            executor.execute {
+                if (pending.remove(result) && !result.isDone) {
+                    try {
+                        result.complete(block())
+                    } catch (e: Throwable) {
+                        result.completeExceptionally(e)
+                    }
+                }
+            }
+        } catch (e: RejectedExecutionException) {
+            pending -= result
+            result.completeExceptionally(e)
         }
+        result.whenComplete { _, _ -> pending -= result }
+        return result
     }
 
-    override fun post(task: () -> Unit) = execute { guarded("A posted task", task) }
+    override fun post(task: () -> Unit) {
+        try {
+            executor.execute { guarded("A posted task", task) }
+        } catch (_: RejectedExecutionException) {
+            // Shut down; drop the task.
+        }
+    }
 
     override fun schedule(
         delayMs: Long,
@@ -69,9 +101,13 @@ class EngineThread(
     /** Stops accepting work; what is queued still runs, timers do not. */
     fun shutdown() = executor.shutdown()
 
-    /** Interrupts whatever is running and drops the queue. */
+    /**
+     * Interrupts the running task, drops the queue, and fails pending [submit] futures. A script
+     * ignores Java interrupts; call [ScriptEngine.interrupt] first.
+     */
     fun shutdownNow() {
         executor.shutdownNow()
+        pending.toList().forEach { it.completeExceptionally(RejectedExecutionException("The engine thread stopped before this ran")) }
     }
 
     fun awaitTermination(timeoutMs: Long): Boolean = executor.awaitTermination(timeoutMs, TimeUnit.MILLISECONDS)
@@ -82,7 +118,7 @@ class EngineThread(
     ) {
         try {
             task()
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             onError("$what failed: ${e.message ?: e.javaClass.simpleName}", e)
         }
     }

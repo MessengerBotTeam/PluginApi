@@ -21,16 +21,15 @@ import com.xfl.msgbot.plugin.api.rpc.RpcHandler
 import com.xfl.msgbot.plugin.api.rpc.RpcPeer
 import com.xfl.msgbot.plugin.api.value.Value
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.Semaphore
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * The plugin side of an engine session: runs the real [ScriptEngine] on its own [EngineThread]
- * and serves the host's requests. [com.xfl.msgbot.plugin.ipc.PluginService] makes one per session;
- * an engine author never touches it.
+ * Plugin side of an engine session: runs the [ScriptEngine] on an [EngineThread] and serves host
+ * requests. Created per session by [com.xfl.msgbot.plugin.ipc.PluginService].
  *
- * At most [maxPendingEvents] events (the running one included) wait for the engine; beyond that
- * the host is told the queue is full instead of the plugin running out of memory.
+ * Events beyond [maxPendingEvents] (including the running one) are rejected as unavailable.
  */
 class EngineEndpoint(
     transport: PluginTransport,
@@ -80,7 +79,7 @@ class EngineEndpoint(
                 reply: (CallResult) -> Unit,
             ) {
                 when (method) {
-                    Wire.HELLO -> reply(CallResult.ok(Wire.hello()))
+                    Wire.HELLO -> reply(Wire.answerHello(params))
                     Wire.ENGINE_LOAD -> {
                         val request =
                             try {
@@ -122,13 +121,15 @@ class EngineEndpoint(
                 method: String,
                 params: Value,
             ) {
-                if (method == Wire.CLOSE) close()
+                when (method) {
+                    Wire.CLOSE -> close()
+                    Wire.ENGINE_INTERRUPT -> interrupt()
+                }
             }
         }
 
-    // The engine is created by the first task on its thread, so any request that arrives once the
-    // peer listens is queued behind it. The latch keeps that task from reporting a failure through
-    // a peer that does not exist yet.
+    // Creating the engine as the first thread task queues every request behind it. The latch stops
+    // that task from reporting a failure before [peer] is assigned.
     private val constructed = CountDownLatch(1)
 
     init {
@@ -136,7 +137,7 @@ class EngineEndpoint(
             constructed.await()
             try {
                 engine = factory.create(context)
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 val message = "The engine could not start: ${e.message ?: e.javaClass.simpleName}"
                 startupFailure = message
                 context.reportError(message, e)
@@ -150,7 +151,7 @@ class EngineEndpoint(
         constructed.countDown()
     }
 
-    /** Runs [block] on the engine thread and answers with what it returned or threw. */
+    /** Catches Throwable so errors like StackOverflowError still reply and release the event slot. */
     private fun onEngine(
         reply: (CallResult) -> Unit,
         block: (ScriptEngine) -> Value,
@@ -164,20 +165,39 @@ class EngineEndpoint(
                         try {
                             val engine = engine ?: throw EngineException(startupFailure ?: "The engine is not running")
                             CallResult.ok(block(engine))
-                        } catch (e: Exception) {
+                        } catch (e: Throwable) {
                             Wire.errorOf(e)
                         }
                     }
                 reply(result)
             }
-        if (thread.isShutdown) reply(CallResult.unavailable("The engine session is closed")) else thread.execute(task)
+        try {
+            thread.execute(task)
+        } catch (_: RejectedExecutionException) {
+            reply(CallResult.unavailable("The engine session is closed"))
+        }
     }
 
-    /** The host dying never says goodbye, so the service closes this too; closing twice is normal. */
+    private fun interrupt() {
+        try {
+            engine?.interrupt()
+        } catch (e: Throwable) {
+            context.reportError("Interrupting the engine failed: ${e.message ?: e.javaClass.simpleName}", e)
+        }
+    }
+
+    /**
+     * Idempotent: both the host and the service may close it. Interrupts a running script first,
+     * or the close task would queue behind it.
+     */
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         peer.close()
-        thread.execute { runCatching { engine?.close() } }
+        interrupt()
+        try {
+            thread.execute { runCatching { engine?.close() } }
+        } catch (_: RejectedExecutionException) {
+        }
         thread.shutdown()
     }
 }

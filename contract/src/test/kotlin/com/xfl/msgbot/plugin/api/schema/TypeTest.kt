@@ -56,4 +56,11 @@ class TypeTest {
         assertTrue(type.check(vObject("name" to "a", "author" to vObject("hash" to "h"), "nmae" to "x"))!!.startsWith("value.nmae: unknown field"))
         assertEquals("value.tags[1]: expected string, got int", type.check(vObject("name" to "a", "author" to vObject("hash" to "h"), "tags" to vArray("x", 2))))
     }
+
+    @Test
+    fun `a type from another app is bounded in length and nesting`() {
+        assertEquals(Type.list(Type.list(Type.INT)), Type.parse("list<list<int>>"))
+        assertFailsWith<IllegalArgumentException> { Type.parse("list<".repeat(50_000) + "int" + ">".repeat(50_000)) }
+        assertFailsWith<IllegalArgumentException> { Type.parse("list<".repeat(40) + "int" + ">".repeat(40)) }
+    }
 }

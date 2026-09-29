@@ -19,10 +19,7 @@ import com.xfl.msgbot.plugin.api.value.Value
 import com.xfl.msgbot.plugin.api.value.asArrayOrNull
 import com.xfl.msgbot.plugin.api.value.asStringOrNull
 
-/**
- * The host side of a provider running in a plugin: a [Provider] like any builtin one, so the host
- * has a single way of running providers. Its [modules] are what the plugin described itself as.
- */
+/** Host-side [Provider] proxy for a provider in a plugin. [modules] come from the plugin's `hello` reply. */
 class RemoteProvider private constructor(
     transport: PluginTransport,
     private val timeoutMs: Long,
@@ -87,7 +84,7 @@ class RemoteProvider private constructor(
     }
 
     companion object {
-        /** Opens the session and reads the module the provider offers. Throws when it will not say. */
+        /** Performs the `hello` handshake and reads the provider's modules. On failure closes the transport and throws. */
         fun connect(
             transport: PluginTransport,
             timeoutMs: Long = 15_000,
@@ -96,7 +93,14 @@ class RemoteProvider private constructor(
             val provider = RemoteProvider(transport, timeoutMs, onError)
             try {
                 val hello = Wire.checkHello(provider.peer.request(Wire.HELLO, Wire.hello(), Wire.HELLO_TIMEOUT_MS))
-                provider.specs = (hello["modules"]?.asArrayOrNull() ?: throw IllegalStateException("The provider did not describe its modules")).map(ModuleSpec::fromValue)
+                val described =
+                    hello["modules"]?.asArrayOrNull() ?: throw IllegalStateException("The provider did not describe its modules")
+                provider.specs =
+                    described.map { value ->
+                        ModuleSpec.read(value).also { read ->
+                            read.skipped.forEach { onError("Left out $it") }
+                        }.spec
+                    }
             } catch (e: Exception) {
                 provider.peer.close()
                 throw e

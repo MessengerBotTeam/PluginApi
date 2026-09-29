@@ -8,27 +8,14 @@ package com.xfl.msgbot.plugin.api.schema
 @DslMarker
 annotation class SchemaDsl
 
-/**
- * Declares a module:
- *
- * ```kotlin
- * val Weather = moduleSpec("weather") {
- *     doc = "Forecasts from the weather service."
- *     function("forecast", returns = Type.STRING) {
- *         param("city", Type.STRING)
- *         optional("days", Type.INT)
- *     }
- *     event("alert") { field("text", Type.STRING) }
- * }
- * ```
- */
+/** Declares a [ModuleSpec] with the builder DSL. */
 fun moduleSpec(
     namespace: String,
     version: Int = 1,
     block: ModuleSpecBuilder.() -> Unit,
 ): ModuleSpec = ModuleSpecBuilder(namespace, version).apply(block).build()
 
-/** An inline struct type, built the same way as event fields. */
+/** An inline struct type. */
 fun Type.Companion.struct(block: FieldsBuilder.() -> Unit): Type = Type.Struct(FieldsBuilder().apply(block).fields.toList())
 
 @SchemaDsl
@@ -43,7 +30,7 @@ open class FieldsBuilder {
         fields += Field(name, type, doc)
     }
 
-    /** A field that may be absent; shorthand for `field(name, type.nullable())`. */
+    /** Shorthand for `field(name, type.nullable())`. */
     fun optional(
         name: String,
         type: Type,
@@ -59,7 +46,7 @@ open class FunctionSpecBuilder internal constructor(
 ) {
     internal val params = mutableListOf<Field>()
 
-    /** Parameters keep their declaration order, which is how positional languages pass them. */
+    /** Declaration order is the positional order. */
     fun param(
         name: String,
         type: Type,
@@ -68,7 +55,7 @@ open class FunctionSpecBuilder internal constructor(
         params += Field(name, type, doc)
     }
 
-    /** A parameter that may be left out. Keep these after the required ones. */
+    /** Must follow all required parameters. */
     fun optional(
         name: String,
         type: Type,

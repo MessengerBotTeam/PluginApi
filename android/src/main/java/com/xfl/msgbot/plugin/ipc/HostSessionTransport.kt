@@ -12,9 +12,8 @@ import com.xfl.msgbot.plugin.api.serialization.BytesChannel
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * The host's end of one session with a bound plugin service. Frames can arrive before anyone
- * listens (a plugin answers as soon as the session opens), so they wait, boundedly, for
- * [setListener] instead of being lost.
+ * Host end of one plugin session. Frames arriving before [setListener] are buffered, up to
+ * [MAX_WAITING].
  */
 class HostSessionTransport(private val service: IPluginService) : PluginTransport {
     private val lock = Any()
@@ -41,7 +40,12 @@ class HostSessionTransport(private val service: IPluginService) : PluginTranspor
                         }
                         current
                     }
-                deliver(frame)
+                // An Error escaping a Binder stub crashes the host process.
+                try {
+                    deliver(frame)
+                } catch (e: Throwable) {
+                    Log.e(TAG, "A frame from the plugin could not be handled", e)
+                }
             }
 
             override fun onShared(
@@ -50,17 +54,15 @@ class HostSessionTransport(private val service: IPluginService) : PluginTranspor
             ) = shared.receive(transferId, region)
         }
 
-    /** Opens the session for [role] and [component]; returns the protocol the service speaks. */
+    /** The protocol is negotiated in the first request, `hello`. */
     fun open(
         role: String,
         component: String,
-    ): Int {
-        val protocol = service.protocolVersion()
+    ) {
         val id = service.open(role, component, callback)
         require(id > 0) { "The plugin returned an invalid session id: $id" }
         session = id
         if (closed.get()) runCatching { service.close(id) }
-        return protocol
     }
 
     override fun send(frame: ByteArray) = service.send(requireSession(), frame)
@@ -93,7 +95,8 @@ class HostSessionTransport(private val service: IPluginService) : PluginTranspor
         session.takeIf { it > 0 }?.let { runCatching { service.close(it) } }
     }
 
-    private fun requireSession(): Long = session.takeIf { it > 0 && !closed.get() } ?: throw IllegalStateException("The plugin session is not open")
+    private fun requireSession(): Long =
+        session.takeIf { it > 0 && !closed.get() } ?: throw IllegalStateException("The plugin session is not open")
 
     private companion object {
         const val MAX_WAITING = 64
