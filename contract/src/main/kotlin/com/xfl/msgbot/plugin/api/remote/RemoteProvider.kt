@@ -5,6 +5,7 @@
 
 package com.xfl.msgbot.plugin.api.remote
 
+import com.xfl.msgbot.plugin.api.call.CallException
 import com.xfl.msgbot.plugin.api.call.CallResult
 import com.xfl.msgbot.plugin.api.provider.Provider
 import com.xfl.msgbot.plugin.api.provider.ProviderContext
@@ -18,6 +19,7 @@ import com.xfl.msgbot.plugin.api.schema.ModuleSpec
 import com.xfl.msgbot.plugin.api.value.Value
 import com.xfl.msgbot.plugin.api.value.asArrayOrNull
 import com.xfl.msgbot.plugin.api.value.asStringOrNull
+import java.util.concurrent.CompletableFuture
 
 /** Host-side [Provider] proxy for a provider in a plugin. [modules] come from the plugin's `hello` reply. */
 class RemoteProvider private constructor(
@@ -56,14 +58,20 @@ class RemoteProvider private constructor(
 
     override val modules: List<ProviderModule> by lazy {
         specs.map { spec ->
-            ProviderModule(spec) { call ->
-                peer
-                    .request(
-                        Wire.PROVIDER_CALL,
-                        Wire.obj("project" to call.projectId, "function" to spec.qualified(call.function), "args" to call.args.values),
-                        timeoutMs,
-                    ).getOrThrow()
-            }
+            ProviderModule(
+                spec,
+                ProviderModule.Dispatch { call ->
+                    val answer = CompletableFuture<Value>()
+                    val params = Wire.obj("project" to call.projectId, "function" to spec.qualified(call.function), "args" to call.args.values)
+                    peer.requestAsync(Wire.PROVIDER_CALL, params, timeoutMs) { result ->
+                        when (result) {
+                            is CallResult.Ok -> answer.complete(result.value)
+                            is CallResult.Err -> answer.completeExceptionally(CallException(result.code, result.message))
+                        }
+                    }
+                    answer
+                },
+            )
         }
     }
 

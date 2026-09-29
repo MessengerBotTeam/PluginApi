@@ -17,6 +17,8 @@ import com.xfl.msgbot.plugin.api.value.asArrayOrNull
 import com.xfl.msgbot.plugin.api.value.asLongOrNull
 import com.xfl.msgbot.plugin.api.value.asObjectOrNull
 import com.xfl.msgbot.plugin.api.value.asStringOrNull
+import java.util.concurrent.CompletionException
+import java.util.concurrent.ExecutionException
 
 /** RPC method names and parameter encoding shared by both ends. */
 internal object Wire {
@@ -121,6 +123,9 @@ internal object Wire {
             is CallResult.Ok -> value
             is CallResult.Err -> throw EngineException("$what failed: $message")
         }
+
+    /** The failure a [java.util.concurrent.CompletionStage] wrapped. */
+    fun Throwable.unwrapped(): Throwable = if (this is CompletionException || this is ExecutionException) cause ?: this else this
 
     fun errorOf(e: Throwable): CallResult =
         when (e) {
