@@ -49,6 +49,8 @@ open class PluginService : Service() {
 
     private val binder =
         object : IPluginService.Stub() {
+            override fun apiFingerprint(): String = BinderContract.FINGERPRINT
+
             override fun open(
                 role: String,
                 component: String,
@@ -58,6 +60,7 @@ open class PluginService : Service() {
                 if (checkCallingOrSelfPermission(PluginManifestSchema.PERMISSION) != PackageManager.PERMISSION_GRANTED) {
                     throw SecurityException("Only MessengerBotR may open plugin sessions")
                 }
+                BinderContract.verify { callback.apiFingerprint() }
                 val transport = PluginSessionTransport(callback)
                 val endpoint =
                     try {

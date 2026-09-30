@@ -81,3 +81,7 @@ class KakaoDirect : Provider {
 ```
 
 MessengerBotR은 이 저장소를 Git 서브모듈로 고정하고 Gradle 복합 빌드로 소스를 직접 사용한다.
+
+## Binder 인터페이스 호환성
+
+AIDL 호출 번호는 명시적으로 고정하며 기존 번호는 바꾸거나 재사용하지 않는다. 세션을 열기 전에 앱과 플러그인은 서비스·콜백 AIDL의 공통 지문을 확인한다. 지문 조회를 지원하지 않는 구버전도 같은 PluginApi Android 버전으로 두 APK를 다시 빌드하라는 오류로 알린다. 이 검사는 RPC의 `hello` 및 프로토콜 버전 `0` 협상과 별개다. AIDL을 바꾸면 `BinderContract.FINGERPRINT`와 호환성 테스트를 함께 갱신한다.

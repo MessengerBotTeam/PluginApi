@@ -3,9 +3,8 @@ package com.xfl.msgbot.plugin.ipc;
 
 import android.os.SharedMemory;
 
-// Plugin -> host, per session. oneway so the plugin never blocks.
 interface IPluginCallback {
-    oneway void onFrame(in byte[] frame);
-
-    oneway void onShared(long transferId, in SharedMemory region);
+    oneway void onFrame(in byte[] frame) = 0;
+    oneway void onShared(long transferId, in SharedMemory region) = 1;
+    String apiFingerprint() = 100;
 }
