@@ -159,6 +159,7 @@ object StandardApi {
                 optional("logId", Type.STRING)
                 optional("isGroupChat", Type.BOOL)
                 optional("packageName", Type.STRING)
+                optional("sourceProviderId", Type.STRING, doc = "Set by the host to identify the provider that delivered this message")
                 optional("isMention", Type.BOOL)
                 optional("isMultiChat", Type.BOOL)
                 optional("isDebugRoom", Type.BOOL, doc = "Set by the host for the debug room; providers leave it out")
