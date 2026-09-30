@@ -14,17 +14,20 @@ import java.security.MessageDigest
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], manifest = Config.NONE)
 class HostSessionTransportTest {
-    private class Service(var fingerprint: String = BinderContract.FINGERPRINT, var id: Long = 1) : IPluginService.Stub() {
+    private class Service(
+        var version: Int = BinderContract.VERSION,
+        var id: Long = 1,
+    ) : IPluginService.Stub() {
         var opens = 0
 
-        override fun apiFingerprint() = fingerprint
+        override fun binderVersion() = version
 
         override fun open(
             role: String,
             component: String,
             callback: IPluginCallback,
         ): Long {
-            assertEquals(BinderContract.FINGERPRINT, callback.apiFingerprint())
+            assertEquals(BinderContract.VERSION, callback.binderVersion())
             opens++
             return id
         }
@@ -44,7 +47,7 @@ class HostSessionTransportTest {
     }
 
     @Test
-    fun aMatchingInterfaceOpensTheSession() {
+    fun aCompatiblePeerOpensTheSession() {
         val service = Service()
         val transport = HostSessionTransport(service)
         try {
@@ -56,23 +59,25 @@ class HostSessionTransportTest {
     }
 
     @Test
-    fun mismatchedInterfacesFailBeforeCallingOpen() {
-        val service = Service(fingerprint = "old-interface")
+    fun aNewerPeerIsAccepted() {
+        val service = Service(version = BinderContract.VERSION + 1)
+        HostSessionTransport(service).open("provider", "source")
+        assertEquals(1, service.opens)
+    }
+
+    @Test
+    fun aPeerOlderThanTheMinimumFailsBeforeCallingOpen() {
+        // A peer built before binderVersion existed answers the default, 0.
+        val service = Service(version = 0)
         val error = runCatching { HostSessionTransport(service).open("provider", "source") }.exceptionOrNull()
-        assertTrue(error is IllegalStateException && error.message!!.contains("Rebuild the app and plugin"))
+        assertTrue(error is IllegalStateException && error.message!!.contains("Rebuild the app or plugin"))
         assertEquals(0, service.opens)
     }
 
     @Test
-    fun zeroSessionIdsExplainTheVersionMismatch() {
-        val error = runCatching { HostSessionTransport(Service(id = 0)).open("provider", "source") }.exceptionOrNull()
-        assertTrue(error is IllegalArgumentException && error.message!!.contains("same PluginApi Android version"))
-    }
-
-    @Test
-    fun aMissingFingerprintMethodExplainsTheVersionMismatch() {
+    fun aFailingVersionCallExplainsTheMismatch() {
         val error = runCatching { BinderContract.verify { throw android.os.RemoteException("unimplemented") } }.exceptionOrNull()
-        assertTrue(error is IllegalStateException && error.message!!.contains("Rebuild the app and plugin"))
+        assertTrue(error is IllegalStateException && error.message!!.contains("Rebuild the app or plugin"))
     }
 
     @Test
@@ -86,20 +91,25 @@ class HostSessionTransportTest {
         assertEquals(first + 1, code(IPluginService.Stub::class.java, "send"))
         assertEquals(first + 2, code(IPluginService.Stub::class.java, "sendShared"))
         assertEquals(first + 3, code(IPluginService.Stub::class.java, "close"))
-        assertEquals(first + 100, code(IPluginService.Stub::class.java, "apiFingerprint"))
+        assertEquals(first + 101, code(IPluginService.Stub::class.java, "binderVersion"))
         assertEquals(first, code(IPluginCallback.Stub::class.java, "onFrame"))
         assertEquals(first + 1, code(IPluginCallback.Stub::class.java, "onShared"))
-        assertEquals(first + 100, code(IPluginCallback.Stub::class.java, "apiFingerprint"))
+        assertEquals(first + 101, code(IPluginCallback.Stub::class.java, "binderVersion"))
     }
 
+    /** Fails when the AIDL changes: raise [BinderContract.VERSION], then record the new version and hash here. */
     @Test
-    fun theFingerprintDescribesBothAidlInterfaces() {
+    fun changingTheAidlRaisesTheBinderVersion() {
         val base = listOf(File("src/main/aidl"), File("android/src/main/aidl")).first { it.exists() }
         val canonical =
             listOf("IPluginService", "IPluginCallback").joinToString("") {
                 File(base, "com/xfl/msgbot/plugin/ipc/$it.aidl").readText().replace(Regex("//[^\\n]*"), "").replace(Regex("\\s+"), "")
             }
         val hash = MessageDigest.getInstance("SHA-256").digest(canonical.toByteArray()).joinToString("") { "%02x".format(it) }
-        assertEquals(BinderContract.FINGERPRINT, hash)
+        assertEquals(AIDL_V1 to 1, hash to BinderContract.VERSION)
+    }
+
+    private companion object {
+        const val AIDL_V1 = "7a477998382ec2e59c2fbd0e78082ca1f26ac948b85c55a8ab281e8c7085af08"
     }
 }
