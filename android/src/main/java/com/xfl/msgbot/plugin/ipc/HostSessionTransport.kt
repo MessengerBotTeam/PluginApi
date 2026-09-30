@@ -30,7 +30,7 @@ class HostSessionTransport(private val service: IPluginService) : PluginTranspor
 
     private val callback =
         object : IPluginCallback.Stub() {
-            override fun apiFingerprint(): String = BinderContract.FINGERPRINT
+            override fun binderVersion(): Int = BinderContract.VERSION
 
             override fun onFrame(frame: ByteArray) {
                 val deliver =
@@ -61,9 +61,9 @@ class HostSessionTransport(private val service: IPluginService) : PluginTranspor
         role: String,
         component: String,
     ) {
-        BinderContract.verify { service.apiFingerprint() }
+        BinderContract.verify { service.binderVersion() }
         val id = service.open(role, component, callback)
-        require(id > 0) { "${BinderContract.MISMATCH} The plugin returned an invalid session id: $id" }
+        require(id > 0) { "The plugin returned an invalid session id: $id" }
         session = id
         if (closed.get()) runCatching { service.close(id) }
     }

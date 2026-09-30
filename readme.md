@@ -87,4 +87,4 @@ MessengerBotR은 이 저장소를 Git 서브모듈로 고정하고 Gradle 복합
 
 ## Binder 인터페이스 호환성
 
-AIDL 호출 번호는 명시적으로 고정하며 기존 번호는 바꾸거나 재사용하지 않는다. 세션을 열기 전에 앱과 플러그인은 서비스·콜백 AIDL의 공통 지문을 확인한다. 지문 조회를 지원하지 않는 구버전도 같은 PluginApi Android 버전으로 두 APK를 다시 빌드하라는 오류로 알린다. 이 검사는 RPC의 `hello` 및 프로토콜 버전 `0` 협상과 별개다. AIDL을 바꾸면 `BinderContract.FINGERPRINT`와 호환성 테스트를 함께 갱신한다.
+AIDL 호출 번호는 명시적으로 고정하며, 기존 번호는 바꾸거나 재사용하지 않는다. 메서드는 새 번호로 추가만 한다. 세션을 열기 전에 앱과 플러그인은 서로의 `binderVersion()`을 확인하고, 상대가 `BinderContract.MIN_VERSION`보다 오래됐으면 다시 빌드하라는 오류로 알린다. 이 메서드가 없는 옛 버전은 0을 돌려주므로 같은 오류가 난다. 메서드를 추가하면 `BinderContract.VERSION`을 올린다. `MIN_VERSION`은 새로 추가한 메서드를 반드시 호출해야 할 때만 올린다. AIDL을 바꾸고 버전을 올리지 않으면 호환성 테스트가 실패한다. 이 검사는 RPC의 `hello`와 프로토콜 버전 협상과는 별개다.

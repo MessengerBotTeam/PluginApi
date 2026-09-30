@@ -5,19 +5,29 @@
 
 package com.xfl.msgbot.plugin.ipc
 
-/** AIDL implementations return [FINGERPRINT] from `apiFingerprint`. */
+/**
+ * The Binder interfaces grow by adding methods under new transaction numbers, so peers only need to
+ * agree on the oldest version both can still serve. AIDL implementations return [VERSION] from
+ * `binderVersion`.
+ */
 object BinderContract {
-    const val FINGERPRINT = "98220de7ea33953000dd9f910fe26ea5f2b9895674b09ffb70aaeb34053675d6"
-    internal const val MISMATCH =
-        "PluginApi Binder interfaces do not match. Rebuild the app and plugin with the same PluginApi Android version."
+    /** Raised whenever a method is added to IPluginService or IPluginCallback. */
+    const val VERSION = 1
 
-    internal fun verify(remote: () -> String?) {
-        val actual =
+    /** The oldest peer this build can talk to. Raise only when a method this build calls is missing from older peers. */
+    const val MIN_VERSION = 1
+
+    internal fun mismatch(version: Int) =
+        "PluginApi Binder interfaces are incompatible (peer $version, need at least $MIN_VERSION). " +
+            "Rebuild the app or plugin with a current PluginApi."
+
+    internal fun verify(remote: () -> Int) {
+        val version =
             try {
                 remote()
             } catch (e: android.os.RemoteException) {
-                throw IllegalStateException(MISMATCH, e)
+                throw IllegalStateException(mismatch(0), e)
             }
-        check(actual == FINGERPRINT) { MISMATCH }
+        check(version >= MIN_VERSION) { mismatch(version) }
     }
 }
