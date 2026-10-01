@@ -15,7 +15,36 @@ import com.xfl.msgbot.plugin.api.value.Value
  */
 sealed interface Type {
     /** Returns an error message naming [path] if [value] does not match, or null. */
-    fun check(value: Value, path: String = "value"): String?
+    fun check(value: Value, path: String = "value"): String? = checkAt(value, Path.Root(path))
+
+    /** [check], building the path only for an error: values can be large and deeply keyed. */
+    fun checkAt(
+        value: Value,
+        path: Path,
+    ): String?
+
+    /** Where a value sits, as in `payload.items[3].name`. */
+    sealed class Path {
+        class Root(private val name: String) : Path() {
+            override fun toString() = name
+        }
+
+        class Index(private val parent: Path, private val index: Int) : Path() {
+            override fun toString() = "$parent[$index]"
+        }
+
+        class Key(private val parent: Path, private val key: String) : Path() {
+            override fun toString(): String {
+                val shown = if (key.length > MAX_KEY_CHARS) key.take(MAX_KEY_CHARS) + "…" else key
+                val prefix = parent.toString()
+                return if (prefix.isEmpty()) shown else "$prefix.$shown"
+            }
+        }
+
+        private companion object {
+            const val MAX_KEY_CHARS = 64
+        }
+    }
 
     enum class Primitive(val keyword: String) : Type {
         ANY("any"),
@@ -29,7 +58,7 @@ sealed interface Type {
         VOID("void"),
         ;
 
-        override fun check(value: Value, path: String): String? {
+        override fun checkAt(value: Value, path: Path): String? {
             val ok =
                 when (this) {
                     ANY -> true
@@ -52,15 +81,15 @@ sealed interface Type {
             require(inner !is Nullable && inner != Primitive.VOID && inner != Primitive.ANY) { "'$inner?' is not a type" }
         }
 
-        override fun check(value: Value, path: String): String? = if (value is Value.VNull) null else inner.check(value, path)
+        override fun checkAt(value: Value, path: Path): String? = if (value is Value.VNull) null else inner.checkAt(value, path)
 
         override fun toString(): String = "$inner?"
     }
 
     data class ListOf(val item: Type) : Type {
-        override fun check(value: Value, path: String): String? {
+        override fun checkAt(value: Value, path: Path): String? {
             if (value !is Value.VArray) return mismatch(path, this, value)
-            value.items.forEachIndexed { i, item -> this.item.check(item, "$path[$i]")?.let { return it } }
+            value.items.forEachIndexed { i, item -> this.item.checkAt(item, Path.Index(path, i))?.let { return it } }
             return null
         }
 
@@ -68,9 +97,9 @@ sealed interface Type {
     }
 
     data class MapOf(val value: Type) : Type {
-        override fun check(value: Value, path: String): String? {
+        override fun checkAt(value: Value, path: Path): String? {
             if (value !is Value.VObject) return mismatch(path, this, value)
-            value.entries.forEach { (key, item) -> this.value.check(item, "$path.$key")?.let { return it } }
+            value.entries.forEach { (key, item) -> this.value.checkAt(item, Path.Key(path, key))?.let { return it } }
             return null
         }
 
@@ -84,7 +113,7 @@ sealed interface Type {
             require(duplicate.isEmpty()) { "Fields declared twice: $duplicate" }
         }
 
-        override fun check(value: Value, path: String): String? {
+        override fun checkAt(value: Value, path: Path): String? {
             if (value !is Value.VObject) return mismatch(path, this, value)
             return checkFields(fields, value.entries, path)
         }
@@ -113,13 +142,12 @@ sealed interface Type {
         internal fun checkFields(
             fields: List<Field>,
             entries: Map<String, Value>,
-            path: String,
+            path: Path,
         ): String? {
-            fun at(name: String) = if (path.isEmpty()) name else "$path.$name"
             val known = fields.associateBy { it.name }
-            entries.keys.firstOrNull { it !in known }?.let { return "${at(it)}: unknown field (expected one of ${known.keys})" }
+            entries.keys.firstOrNull { it !in known }?.let { return "${Path.Key(path, it)}: unknown field (expected one of ${known.keys})" }
             for (field in fields) {
-                field.type.check(entries[field.name] ?: Value.VNull, at(field.name))?.let { return it }
+                field.type.checkAt(entries[field.name] ?: Value.VNull, Path.Key(path, field.name))?.let { return it }
             }
             return null
         }
@@ -137,7 +165,7 @@ sealed interface Type {
             }
 
         private fun mismatch(
-            path: String,
+            path: Path,
             expected: Type,
             actual: Value,
         ): String =

@@ -48,4 +48,12 @@ class ProviderModuleTest {
         assertEquals(ErrorCode.UNKNOWN_FUNCTION, e.code)
         assertFailsWith<IllegalArgumentException> { implement(StandardApi.Bot) { handle("teleport") { } } }
     }
+
+    @Test
+    fun `an Error from a handler fails the call instead of escaping it`() {
+        val module = provide("broken") { function("todo") { handle { TODO("later") } } }
+        val answer = module.callAsync(ProviderCall("demo", "todo", Args.NONE))
+        val e = assertFailsWith<java.util.concurrent.ExecutionException> { answer.get() }
+        assertIs<NotImplementedError>(e.cause)
+    }
 }

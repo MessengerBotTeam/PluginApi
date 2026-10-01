@@ -139,6 +139,7 @@ abstract class ProviderConformance {
         // A stopped provider may refuse to be provoked; it only must not emit.
         runCatching { provokeEvents(harness.provider) }
         assertEquals(emptyList(), harness.drainEvents(200))
+        assertTrue(harness.errors.isEmpty(), "Reported: ${harness.errors}")
     }
 
     companion object {

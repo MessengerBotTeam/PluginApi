@@ -42,9 +42,10 @@ class RemoteScriptEngine private constructor(
                 reply: (CallResult) -> Unit,
             ) {
                 if (method != Wire.HOST_CALL) return reply(CallResult.failed("The host does not answer '$method'"))
+                val map: Map<String, Value>
                 val call =
                     try {
-                        val map = params.map()
+                        map = params.map()
                         map.string("function") to map.getValue("args").map()
                     } catch (e: Exception) {
                         return reply(CallResult.badArgs("Malformed call: ${e.message}"))
@@ -53,7 +54,14 @@ class RemoteScriptEngine private constructor(
                 try {
                     callExecutor.execute {
                         try {
-                            reply(context.host.call(call.first, call.second))
+                            // A call the script stopped waiting for must not take effect, such as a reply sent twice.
+                            val result =
+                                if (Wire.expired(map)) {
+                                    CallResult.unavailable("'${call.first}' waited past the script's deadline and was skipped")
+                                } else {
+                                    context.host.call(call.first, call.second)
+                                }
+                            reply(result)
                         } catch (e: Throwable) {
                             reply(Wire.errorOf(e))
                         } finally {
@@ -84,7 +92,7 @@ class RemoteScriptEngine private constructor(
 
     override fun dispatch(event: ScriptEvent) {
         peer
-            .request(Wire.ENGINE_DISPATCH, Wire.obj("event" to event.name, "payload" to event.payload), timeoutMs)
+            .request(Wire.ENGINE_DISPATCH, Wire.obj("event" to event.name, "payload" to event.payload, Wire.deadline(timeoutMs)), timeoutMs)
             .orEngineException("'${event.name}'")
     }
 

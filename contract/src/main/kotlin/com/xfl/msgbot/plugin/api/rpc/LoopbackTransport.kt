@@ -13,9 +13,12 @@ class LoopbackTransport private constructor(name: String) : PluginTransport {
     private var peer: LoopbackTransport? = null
 
     @Volatile private var listener: ((ByteArray) -> Unit)? = null
+
+    @Volatile private var closed = false
     private val delivery = Executors.newSingleThreadExecutor { r -> Thread(r, "loopback-$name").apply { isDaemon = true } }
 
     override fun send(frame: ByteArray) {
+        if (closed) throw TransportClosedException("This side is closed")
         peer?.deliver(frame)
     }
 
@@ -24,14 +27,16 @@ class LoopbackTransport private constructor(name: String) : PluginTransport {
     }
 
     override fun close() {
+        closed = true
         delivery.shutdown()
     }
 
+    /** A closed other side refuses the frame, like a dead Binder. */
     private fun deliver(frame: ByteArray) {
-        // A closed peer drops the frame silently, like a dead Binder.
         try {
             delivery.execute { listener?.invoke(frame) }
-        } catch (_: RejectedExecutionException) {
+        } catch (e: RejectedExecutionException) {
+            throw TransportClosedException("The other side is closed", e)
         }
     }
 

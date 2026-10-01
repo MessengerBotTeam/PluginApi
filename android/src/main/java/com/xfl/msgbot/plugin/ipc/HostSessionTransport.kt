@@ -5,9 +5,11 @@
 
 package com.xfl.msgbot.plugin.ipc
 
+import android.os.RemoteException
 import android.os.SharedMemory
 import android.util.Log
 import com.xfl.msgbot.plugin.api.rpc.PluginTransport
+import com.xfl.msgbot.plugin.api.rpc.TransportClosedException
 import com.xfl.msgbot.plugin.api.serialization.BytesChannel
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -24,7 +26,7 @@ class HostSessionTransport(private val service: IPluginService) : PluginTranspor
 
     @Volatile private var session: Long = 0
 
-    private val shared = SharedBytes { id, region -> service.sendShared(requireSession(), id, region) }
+    private val shared = SharedBytes { id, region -> deliver { service.sendShared(requireSession(), id, region) } }
 
     override val bytes: BytesChannel get() = shared
 
@@ -33,6 +35,7 @@ class HostSessionTransport(private val service: IPluginService) : PluginTranspor
             override fun binderVersion(): Int = BinderContract.VERSION
 
             override fun onFrame(frame: ByteArray) {
+                if (closed.get()) return
                 val deliver =
                     synchronized(lock) {
                         val current = listener
@@ -68,7 +71,17 @@ class HostSessionTransport(private val service: IPluginService) : PluginTranspor
         if (closed.get()) runCatching { service.close(id) }
     }
 
-    override fun send(frame: ByteArray) = service.send(requireSession(), frame)
+    override fun send(frame: ByteArray) = deliver { service.send(requireSession(), frame) }
+
+    /** Binder reports a full one-way buffer as a [RemoteException] too; only a dead plugin closes the transport. */
+    private inline fun deliver(call: () -> Unit) {
+        try {
+            call()
+        } catch (e: RemoteException) {
+            if (!service.asBinder().isBinderAlive) throw TransportClosedException("The plugin is gone", e)
+            throw e
+        }
+    }
 
     override fun setListener(listener: (ByteArray) -> Unit) {
         synchronized(lock) {
@@ -99,7 +112,7 @@ class HostSessionTransport(private val service: IPluginService) : PluginTranspor
     }
 
     private fun requireSession(): Long =
-        session.takeIf { it > 0 && !closed.get() } ?: throw IllegalStateException("The plugin session is not open")
+        session.takeIf { it > 0 && !closed.get() } ?: throw TransportClosedException("The plugin session is not open")
 
     private companion object {
         const val MAX_WAITING = 64

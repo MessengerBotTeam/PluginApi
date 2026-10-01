@@ -89,6 +89,19 @@ class RpcPeerTest {
     }
 
     @Test
+    fun `a peer whose other side is gone fails what waits at once`() {
+        val waiting = CompletableFuture<CallResult>()
+        host.requestAsync("never", timeoutMs = 10_000, onResult = waiting::complete)
+        pluginSide.close()
+        val started = System.nanoTime()
+        val answer = host.request("echo", timeoutMs = 10_000)
+        assertEquals(ErrorCode.UNAVAILABLE, (answer as CallResult.Err).code)
+        assertEquals(ErrorCode.UNAVAILABLE, (waiting.get(1, TimeUnit.SECONDS) as CallResult.Err).code)
+        assertTrue(System.nanoTime() - started < 1_000_000_000L, "failed at once")
+        assertTrue(host.isClosed)
+    }
+
+    @Test
     fun `notifications arrive without an answer`() {
         plugin.notify("hi", Value.VString("there"))
         assertEquals("hi" to Value.VString("there"), notes.get(5, TimeUnit.SECONDS))

@@ -8,6 +8,7 @@ package com.xfl.msgbot.plugin.ipc
 import android.os.SharedMemory
 import android.system.OsConstants
 import android.util.Log
+import com.xfl.msgbot.plugin.api.rpc.TransportClosedException
 import com.xfl.msgbot.plugin.api.serialization.BytesChannel
 import com.xfl.msgbot.plugin.api.serialization.MalformedFrameException
 import java.util.concurrent.ConcurrentHashMap
@@ -23,6 +24,8 @@ class SharedBytes(
 ) : BytesChannel {
     private val received = ConcurrentHashMap<Long, SharedMemory>()
     private val transferIds = AtomicLong()
+
+    @Volatile private var closed = false
 
     override fun offload(bytes: ByteArray): Long? = if (bytes.size < THRESHOLD_BYTES) null else share(bytes)
 
@@ -41,6 +44,8 @@ class SharedBytes(
             // Read-only before handing it over.
             region.setProtect(OsConstants.PROT_READ)
             transferIds.incrementAndGet().also { publish(it, region) }
+        } catch (e: TransportClosedException) {
+            throw e
         } catch (e: Exception) {
             Log.w(TAG, "Shared memory unavailable; keeping ${bytes.size} bytes inline", e)
             null
@@ -57,7 +62,8 @@ class SharedBytes(
         val region = received.remove(transferId) ?: throw MalformedFrameException("No shared region $transferId arrived")
         return try {
             if (length > region.size) throw MalformedFrameException("Shared region $transferId holds ${region.size} bytes, not $length")
-            val buffer = region.mapReadOnly()
+            // Only what the frame claims: the other side chose the region's size.
+            val buffer = region.map(OsConstants.PROT_READ, 0, length)
             try {
                 ByteArray(length).also { buffer.get(it) }
             } finally {
@@ -72,23 +78,33 @@ class SharedBytes(
         transferId: Long,
         region: SharedMemory,
     ) {
+        if (closed) {
+            runCatching { region.close() }
+            return
+        }
         // Regions whose frame was dropped are never claimed. IDs increase, so evict the oldest.
         while (received.size >= MAX_OUTSTANDING) {
             val oldest = received.keys.minOrNull() ?: break
             Log.w(TAG, "Discarding shared region $oldest: $MAX_OUTSTANDING wait for their frames")
             received.remove(oldest)?.let { runCatching { it.close() } }
         }
-        received.put(transferId, region)?.close()
+        received.put(transferId, region)?.let { runCatching { it.close() } }
+        // clear() may have run in between and missed it.
+        if (closed) received.remove(transferId)?.let { runCatching { it.close() } }
     }
 
+    /** Closes what waits and every region that arrives later. */
     fun clear() {
+        closed = true
         received.values.forEach { runCatching { it.close() } }
         received.clear()
     }
 
     private companion object {
         const val THRESHOLD_BYTES = 16 * 1024
-        const val MAX_OUTSTANDING = 64
+
+        /** Several frames' worth of [com.xfl.msgbot.plugin.api.serialization.ValueCodec.MAX_OFFLOADS]. */
+        const val MAX_OUTSTANDING = 256
         const val TAG = "SharedBytes"
     }
 }

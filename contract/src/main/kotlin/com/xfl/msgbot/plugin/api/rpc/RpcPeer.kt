@@ -193,7 +193,8 @@ class RpcPeer(
     /**
      * Frames over [INLINE_FRAME_BYTES] go out of band. Binder shares one small buffer among every
      * one-way call in flight to a process, so a burst of inline frames can be refused even when
-     * each fits; a refused frame is sent again out of band, after a short wait if even that fails.
+     * each fits; a refused frame is sent again out of band, after short waits if even that fails.
+     * A transport whose other side is gone closes this peer instead.
      */
     private inline fun send(
         frame: Value,
@@ -206,12 +207,17 @@ class RpcPeer(
                 try {
                     transport.send(encoded)
                     return
+                } catch (e: TransportClosedException) {
+                    throw e
                 } catch (e: Exception) {
                     if (!sendOutOfBand(encoded)) throw e
                     return
                 }
             }
             if (!sendOutOfBand(encoded)) transport.send(encoded)
+        } catch (_: TransportClosedException) {
+            // Pending requests, this one included, fail now; nothing else can be sent or answered.
+            close()
         } catch (e: Exception) {
             onFailure(describe(e))
         }
@@ -226,6 +232,8 @@ class RpcPeer(
             try {
                 transport.send(pointer)
                 return true
+            } catch (e: TransportClosedException) {
+                throw e
             } catch (e: Exception) {
                 if (++attempt > RETRY_DELAYS_MS.size || closed.get()) throw e
                 Thread.sleep(RETRY_DELAYS_MS[attempt - 1])
@@ -268,7 +276,8 @@ class RpcPeer(
 
         const val INLINE_FRAME_BYTES = 16 * 1024
 
-        val RETRY_DELAYS_MS = longArrayOf(10, 50, 200)
+        /** About two seconds in all: long enough for a busy receiver to drain its buffer. */
+        val RETRY_DELAYS_MS = longArrayOf(10, 50, 200, 500, 1_000)
 
         val TIMER =
             ScheduledThreadPoolExecutor(1) { r -> Thread(r, "plugin-rpc-timeouts").apply { isDaemon = true } }

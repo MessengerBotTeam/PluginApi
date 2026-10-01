@@ -10,6 +10,8 @@ import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
 import java.nio.BufferUnderflowException
 import java.nio.ByteBuffer
+import java.nio.CharBuffer
+import java.nio.charset.CodingErrorAction
 
 /** Out-of-band channel for large byte payloads (e.g. shared memory). The frame keeps only an ID and length. */
 interface BytesChannel {
@@ -58,6 +60,12 @@ object ValueCodec {
     /** Values are much larger in memory than on the wire, so cap the count per frame. */
     const val MAX_VALUES = 1 shl 20
 
+    /**
+     * Byte payloads one frame sends out of band; later ones stay inline, and the frame as a whole
+     * goes out of band. Bounds the regions that wait on the other side for their frame.
+     */
+    const val MAX_OFFLOADS = 16
+
     private const val T_NULL = 0
     private const val T_FALSE = 1
     private const val T_TRUE = 2
@@ -69,12 +77,16 @@ object ValueCodec {
     private const val T_OBJECT = 8
     private const val T_SHARED_BYTES = 9
 
+    /**
+     * Throws [IllegalArgumentException] for a value [decode] would refuse, before sending any of
+     * it, so the caller can answer with an error instead of the other side dropping the frame.
+     */
     fun encode(
         value: Value,
         bytes: BytesChannel = BytesChannel.INLINE,
     ): ByteArray {
         val out = ByteArrayOutputStream()
-        DataOutputStream(out).use { write(it, value, bytes, 0) }
+        DataOutputStream(out).use { write(it, value, bytes, 0, Budget()) }
         return out.toByteArray()
     }
 
@@ -98,8 +110,10 @@ object ValueCodec {
         value: Value,
         channel: BytesChannel,
         depth: Int,
+        budget: Budget,
     ) {
         require(depth <= MAX_DEPTH) { "Values nest deeper than $MAX_DEPTH" }
+        require(++budget.values <= MAX_VALUES) { "A frame holds more than $MAX_VALUES values" }
         when (value) {
             Value.VNull -> out.writeByte(T_NULL)
             is Value.VBool -> out.writeByte(if (value.value) T_TRUE else T_FALSE)
@@ -113,17 +127,19 @@ object ValueCodec {
             }
             is Value.VString -> {
                 out.writeByte(T_STRING)
-                writeBytes(out, value.value.toByteArray(Charsets.UTF_8))
+                writeBytes(out, utf8(value.value))
             }
             is Value.VBytes -> {
-                require(value.value.size <= MAX_SHARED_BYTES) {
-                    "${value.value.size} bytes are more than one value may carry ($MAX_SHARED_BYTES)"
-                }
-                val transfer = channel.offload(value.value)
+                val size = value.value.size
+                require(size <= MAX_SHARED_BYTES) { "$size bytes are more than one value may carry ($MAX_SHARED_BYTES)" }
+                val transfer =
+                    if (budget.offloads < MAX_OFFLOADS && budget.sharedBytes + size <= MAX_SHARED_BYTES) channel.offload(value.value) else null
                 if (transfer != null) {
+                    budget.offloads++
+                    budget.sharedBytes += size
                     out.writeByte(T_SHARED_BYTES)
                     out.writeLong(transfer)
-                    out.writeInt(value.value.size)
+                    out.writeInt(size)
                 } else {
                     out.writeByte(T_BYTES)
                     writeBytes(out, value.value)
@@ -132,14 +148,14 @@ object ValueCodec {
             is Value.VArray -> {
                 out.writeByte(T_ARRAY)
                 out.writeInt(value.items.size)
-                value.items.forEach { write(out, it, channel, depth + 1) }
+                value.items.forEach { write(out, it, channel, depth + 1, budget) }
             }
             is Value.VObject -> {
                 out.writeByte(T_OBJECT)
                 out.writeInt(value.entries.size)
                 value.entries.forEach { (key, item) ->
-                    writeBytes(out, key.toByteArray(Charsets.UTF_8))
-                    write(out, item, channel, depth + 1)
+                    writeBytes(out, utf8(key))
+                    write(out, item, channel, depth + 1, budget)
                 }
             }
         }
@@ -148,7 +164,11 @@ object ValueCodec {
     /** Allocation so far for one frame. */
     private class Budget {
         var values = 0
+
+        /** Items the collections read so far declare, so nested ones cannot each claim the whole budget up front. */
+        var declared = 0L
         var sharedBytes = 0L
+        var offloads = 0
     }
 
     private fun read(
@@ -201,7 +221,8 @@ object ValueCodec {
             throw MalformedFrameException("Collection of $count items in ${buffer.remaining()} bytes")
         }
         // Check before allocating the collection.
-        if (count > MAX_VALUES - budget.values) throw MalformedFrameException("A frame holds more than $MAX_VALUES values")
+        budget.declared += count
+        if (budget.declared >= MAX_VALUES) throw MalformedFrameException("A frame holds more than $MAX_VALUES values")
         return count
     }
 
@@ -209,9 +230,25 @@ object ValueCodec {
         out: DataOutputStream,
         bytes: ByteArray,
     ) {
+        require(out.size().toLong() + bytes.size <= MAX_SHARED_BYTES) { "A frame is more than $MAX_SHARED_BYTES bytes" }
         out.writeInt(bytes.size)
         out.write(bytes)
     }
+
+    /** Like [String.toByteArray], but a lone surrogate becomes U+FFFD instead of '?'. */
+    private fun utf8(text: String): ByteArray {
+        if (text.none(Char::isSurrogate)) return text.toByteArray(Charsets.UTF_8)
+        val encoder =
+            Charsets.UTF_8
+                .newEncoder()
+                .onMalformedInput(CodingErrorAction.REPLACE)
+                .onUnmappableCharacter(CodingErrorAction.REPLACE)
+                .replaceWith(REPLACEMENT)
+        val buffer = encoder.encode(CharBuffer.wrap(text))
+        return ByteArray(buffer.remaining()).also(buffer::get)
+    }
+
+    private val REPLACEMENT = "\uFFFD".toByteArray(Charsets.UTF_8)
 
     private fun readBytes(buffer: ByteBuffer): ByteArray {
         val length = buffer.int

@@ -13,6 +13,10 @@ import com.xfl.msgbot.plugin.api.serialization.BytesChannel
  * Deliver frames on a thread that never blocks on its own calls, or a blocking call deadlocks on its answer.
  */
 interface PluginTransport {
+    /**
+     * Throws [TransportClosedException] when the other side is gone for good. Any other exception
+     * means only this frame was refused, for example because the other side's buffer is full.
+     */
     fun send(frame: ByteArray)
 
     fun setListener(listener: (ByteArray) -> Unit)
