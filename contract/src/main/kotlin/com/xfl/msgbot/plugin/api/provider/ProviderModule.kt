@@ -38,10 +38,11 @@ class ProviderModule(
 
     constructor(spec: ModuleSpec, handler: (ProviderCall) -> Value) : this(spec, Dispatch { call -> answerNow { handler(call) } })
 
+    /** Never throws, not even an [Error] such as `TODO()`: the failure is in the future, as it is for a remote provider. */
     fun callAsync(call: ProviderCall): CompletableFuture<Value> =
         try {
             dispatch.call(call).toCompletableFuture()
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             CompletableFuture.failedFuture(e)
         }
 
@@ -72,7 +73,7 @@ internal sealed interface Implementation {
 private inline fun answerNow(block: () -> Value): CompletableFuture<Value> =
     try {
         CompletableFuture.completedFuture(block())
-    } catch (e: Exception) {
+    } catch (e: Throwable) {
         CompletableFuture.failedFuture(e)
     }
 

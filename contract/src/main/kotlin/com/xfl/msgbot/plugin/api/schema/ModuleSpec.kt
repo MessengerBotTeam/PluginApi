@@ -7,7 +7,7 @@ package com.xfl.msgbot.plugin.api.schema
 
 import com.xfl.msgbot.plugin.api.value.Value
 import com.xfl.msgbot.plugin.api.value.asArrayOrNull
-import com.xfl.msgbot.plugin.api.value.asLongOrNull
+import com.xfl.msgbot.plugin.api.value.asIntOrNull
 import com.xfl.msgbot.plugin.api.value.asObjectOrNull
 import com.xfl.msgbot.plugin.api.value.asStringOrNull
 
@@ -47,7 +47,7 @@ data class FunctionSpec(
     }
 
     /** Returns why [args] are invalid, or null. */
-    fun checkArgs(args: Map<String, Value>): String? = Type.checkFields(params, args, "")
+    fun checkArgs(args: Map<String, Value>): String? = Type.checkFields(params, args, Type.Path.Root(""))
 
     fun checkResult(value: Value): String? = returns.check(value, "result")
 
@@ -67,7 +67,7 @@ data class EventSpec(
         require(duplicate.isEmpty()) { "Fields declared twice in $name: $duplicate" }
     }
 
-    fun checkPayload(payload: Map<String, Value>): String? = Type.checkFields(fields, payload, "")
+    fun checkPayload(payload: Map<String, Value>): String? = Type.checkFields(fields, payload, Type.Path.Root(""))
 
     /** Drops payload fields not in [fields]. */
     fun conform(payload: Map<String, Value>): Map<String, Value> = conformFields(fields, payload)
@@ -225,7 +225,7 @@ data class ModuleSpec(
             val spec =
                 ModuleSpec(
                     namespace = namespace,
-                    version = (map["version"]?.asLongOrNull() ?: 1L).toInt(),
+                    version = map["version"]?.let { it.asIntOrNull() ?: throw IllegalArgumentException("version $it is not an int") } ?: 1,
                     functions = functions,
                     events = events,
                     doc = map["doc"]?.asStringOrNull().orEmpty(),

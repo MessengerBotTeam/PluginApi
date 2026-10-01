@@ -63,4 +63,16 @@ class TypeTest {
         assertFailsWith<IllegalArgumentException> { Type.parse("list<".repeat(50_000) + "int" + ">".repeat(50_000)) }
         assertFailsWith<IllegalArgumentException> { Type.parse("list<".repeat(40) + "int" + ">".repeat(40)) }
     }
+
+    @Test
+    fun `checking a large value does not build a path for every item`() {
+        val key = "k".repeat(1 shl 20)
+        val value = vObject(key to Value.VArray(List(200_000) { Value.VNull }))
+        val started = System.nanoTime()
+        assertNull(Type.map(Type.list(Type.ANY)).check(value))
+        assertTrue(System.nanoTime() - started < 2_000_000_000L, "took ${(System.nanoTime() - started) / 1_000_000}ms")
+        // Errors still name where, with a long key shortened.
+        val error = Type.map(Type.list(Type.INT)).check(vObject(key to vArray(1, "two")))!!
+        assertTrue(error.startsWith("value.${"k".repeat(64)}…[1]: expected int"), error)
+    }
 }

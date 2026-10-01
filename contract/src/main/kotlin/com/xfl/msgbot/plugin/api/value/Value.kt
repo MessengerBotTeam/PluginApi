@@ -95,9 +95,13 @@ fun Value.asBooleanOrNull(): Boolean? = (this as? Value.VBool)?.value
 fun Value.asLongOrNull(): Long? =
     when (this) {
         is Value.VInt -> value
-        is Value.VDouble -> value.takeIf { it % 1.0 == 0.0 && it >= Long.MIN_VALUE.toDouble() && it <= Long.MAX_VALUE.toDouble() }?.toLong()
+        // Long.MAX_VALUE.toDouble() rounds up to 2^63, which no Long holds.
+        is Value.VDouble -> value.takeIf { it % 1.0 == 0.0 && it >= Long.MIN_VALUE.toDouble() && it < -Long.MIN_VALUE.toDouble() }?.toLong()
         else -> null
     }
+
+/** [asLongOrNull] within the range of an Int. */
+fun Value.asIntOrNull(): Int? = asLongOrNull()?.takeIf { it in Int.MIN_VALUE..Int.MAX_VALUE }?.toInt()
 
 fun Value.asDoubleOrNull(): Double? =
     when (this) {

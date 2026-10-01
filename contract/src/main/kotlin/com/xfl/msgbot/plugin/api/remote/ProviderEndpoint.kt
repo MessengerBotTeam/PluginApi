@@ -6,6 +6,7 @@
 package com.xfl.msgbot.plugin.api.remote
 
 import com.xfl.msgbot.plugin.api.call.Args
+import com.xfl.msgbot.plugin.api.call.CallException
 import com.xfl.msgbot.plugin.api.call.CallResult
 import com.xfl.msgbot.plugin.api.engine.EngineThread
 import com.xfl.msgbot.plugin.api.provider.Provider
@@ -21,7 +22,9 @@ import com.xfl.msgbot.plugin.api.rpc.RpcHandler
 import com.xfl.msgbot.plugin.api.rpc.RpcPeer
 import com.xfl.msgbot.plugin.api.schema.Names
 import com.xfl.msgbot.plugin.api.value.Value
+import com.xfl.msgbot.plugin.api.value.asLongOrNull
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicBoolean
@@ -31,9 +34,11 @@ import java.util.concurrent.atomic.AtomicBoolean
  * session by [com.xfl.msgbot.plugin.ipc.PluginService].
  *
  * Validates emitted events locally so `emit` throws at the call site instead of the host dropping them.
+ * [onProtocolError] hears about frames that were lost, such as an answer that could not be sent.
  */
 class ProviderEndpoint(
     transport: PluginTransport,
+    private val onProtocolError: (String) -> Unit = {},
     private val factory: () -> Provider,
 ) : AutoCloseable {
     private val closed = AtomicBoolean(false)
@@ -48,8 +53,28 @@ class ProviderEndpoint(
 
     @Volatile private var running: Running? = null
 
-    private inner class Running(override val projects: Map<String, Map<String, String>>) : ProviderContext {
+    /** One `provider.start`; [generation] tags its emits so the host can drop them after a restart. */
+    private inner class Running(
+        override val projects: Map<String, Map<String, String>>,
+        private val generation: Long?,
+    ) : ProviderContext {
         @Volatile var active = true
+
+        /** Answers still owed; stopping gives them, or the host would wait out its timeout. */
+        private val owed = ConcurrentHashMap.newKeySet<CompletableFuture<Value>>()
+
+        fun owe(answer: CompletableFuture<Value>): CompletableFuture<Value> {
+            val owedAnswer = CompletableFuture<Value>()
+            owed += owedAnswer
+            owedAnswer.whenComplete { _, _ -> owed -= owedAnswer }
+            answer.whenComplete { value, error -> if (error == null) owedAnswer.complete(value) else owedAnswer.completeExceptionally(error) }
+            return owedAnswer
+        }
+
+        fun end() {
+            active = false
+            owed.toList().forEach { it.completeExceptionally(CallException.unavailable("The provider stopped before answering")) }
+        }
 
         override fun emit(
             event: String,
@@ -60,7 +85,12 @@ class ProviderEndpoint(
             val module = requireNotNull(modules[namespace]) { "This provider publishes no '$namespace' module" }
             val declared = requireNotNull(module.spec.event(name)) { "$namespace declares no event '$name'" }
             declared.checkPayload(payload)?.let { throw IllegalArgumentException("$event: $it") }
-            if (active) peer.notify(Wire.PROVIDER_EMIT, Wire.obj("event" to event, "payload" to payload, "project" to projectId))
+            if (active) {
+                peer.notify(Wire.PROVIDER_EMIT, Wire.obj("event" to event, "payload" to payload, "project" to projectId, Wire.GENERATION to generation))
+            } else {
+                // Dropped either way; saying so lets a provider find the thread it did not stop.
+                this@ProviderEndpoint.reportError("'$event' was emitted after the provider stopped and was dropped")
+            }
         }
 
         override fun reportError(
@@ -79,12 +109,21 @@ class ProviderEndpoint(
                 when (method) {
                     Wire.HELLO -> onProvider(reply) { Wire.answerHello(params) { modules.values.map { it.spec } }.getOrThrow() }
                     Wire.PROVIDER_START -> {
-                        val projects = Wire.projectsOf(params.map()["projects"])
+                        val map = params.map()
+                        val projects = Wire.projectsOf(map["projects"])
+                        val generation = map[Wire.GENERATION]?.asLongOrNull()
                         onProvider(reply) { provider ->
                             stopRunning(provider)
-                            val context = Running(projects)
+                            val context = Running(projects, generation)
                             running = context
-                            provider.start(context)
+                            try {
+                                provider.start(context)
+                            } catch (e: Throwable) {
+                                // A provider that did not start must not emit as if it had.
+                                running = null
+                                context.end()
+                                throw e
+                            }
                             Value.VNull
                         }
                     }
@@ -94,19 +133,30 @@ class ProviderEndpoint(
                             Value.VNull
                         }
                     Wire.PROVIDER_CALL -> {
-                        val (module, call) =
-                            try {
-                                val map = params.map()
-                                val project = map.string("project")
-                                val (namespace, name) =
-                                    Names.split(map.string("function")) ?: throw IllegalArgumentException("unqualified function")
-                                val module = modules[namespace] ?: return reply(CallResult.unknownFunction(map.string("function")))
-                                val options = running?.projects?.get(project).orEmpty()
-                                module to ProviderCall(project, name, Args(map.getValue("args").map()), options)
-                            } catch (e: Exception) {
-                                return reply(CallResult.badArgs("Malformed call: ${e.message}"))
-                            }
-                        onProviderAsync(reply) { module.callAsync(call) }
+                        val map: Map<String, Value>
+                        val function: String
+                        val module: ProviderModule
+                        val project: String
+                        val name: String
+                        val args: Args
+                        try {
+                            map = params.map()
+                            function = map.string("function")
+                            project = map.string("project")
+                            val (namespace, member) = Names.split(function) ?: throw IllegalArgumentException("unqualified function")
+                            name = member
+                            module = modules[namespace] ?: return reply(CallResult.unknownFunction(function))
+                            args = Args(map.getValue("args").map())
+                        } catch (e: Exception) {
+                            return reply(CallResult.badArgs("Malformed call: ${e.message}"))
+                        }
+                        onProviderAsync(reply) {
+                            // Behind a slow call: the host has given up, and running it now could act twice.
+                            if (Wire.expired(map)) throw CallException.unavailable("'$function' waited past the host's deadline and was skipped")
+                            // Read here, not on arrival: a restart queued ahead of this call changes the options.
+                            val current = running ?: throw CallException.unavailable("The provider is not running")
+                            current.owe(module.callAsync(ProviderCall(project, name, args, current.projects[project].orEmpty())))
+                        }
                     }
                     else -> reply(CallResult.failed("A provider does not answer '$method'"))
                 }
@@ -134,7 +184,7 @@ class ProviderEndpoint(
         }
     }
 
-    private val peer: RpcPeer = RpcPeer(transport, handler)
+    private val peer: RpcPeer = RpcPeer(transport, handler, onProtocolError)
 
     init {
         constructed.countDown()
@@ -142,8 +192,8 @@ class ProviderEndpoint(
 
     private fun stopRunning(provider: Provider) {
         val current = running ?: return
-        current.active = false
         running = null
+        current.end()
         provider.stop()
     }
 
@@ -171,7 +221,14 @@ class ProviderEndpoint(
                         return@execute reply(Wire.errorOf(e))
                     }
                 answer.whenComplete { value, error ->
-                    reply(if (error == null) CallResult.ok(value) else Wire.errorOf(error.unwrapped()))
+                    // A stage from Java may complete with null; anything thrown here would lose the answer.
+                    val result =
+                        try {
+                            if (error == null) CallResult.ok((value as Value?) ?: Value.VNull) else Wire.errorOf(error.unwrapped())
+                        } catch (e: Throwable) {
+                            Wire.errorOf(e)
+                        }
+                    reply(result)
                 }
             }
         } catch (_: RejectedExecutionException) {
@@ -181,6 +238,7 @@ class ProviderEndpoint(
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
+        running?.end()
         peer.close()
         try {
             thread.execute {

@@ -18,6 +18,7 @@ import com.xfl.msgbot.plugin.api.rpc.RpcPeer
 import com.xfl.msgbot.plugin.api.schema.ModuleSpec
 import com.xfl.msgbot.plugin.api.value.Value
 import com.xfl.msgbot.plugin.api.value.asArrayOrNull
+import com.xfl.msgbot.plugin.api.value.asLongOrNull
 import com.xfl.msgbot.plugin.api.value.asStringOrNull
 import java.util.concurrent.CompletableFuture
 
@@ -28,6 +29,9 @@ class RemoteProvider private constructor(
     private val onError: (String) -> Unit,
 ) : Provider {
     @Volatile private var context: ProviderContext? = null
+
+    /** Of the latest [start]; emits from an earlier one are dropped. */
+    @Volatile private var generation = 0L
 
     private lateinit var specs: List<ModuleSpec>
 
@@ -47,7 +51,14 @@ class RemoteProvider private constructor(
                     Wire.PROVIDER_EMIT -> {
                         val current = context ?: return
                         val map = params.map()
-                        current.emit(map.string("event"), map["payload"]?.map().orEmpty(), map["project"]?.asStringOrNull())
+                        // Plugins built before generations send none; their emits are taken as current.
+                        val from = map[Wire.GENERATION]?.asLongOrNull()
+                        if (from != null && from != generation) return
+                        val project = map["project"] ?: Value.VNull
+                        if (project !is Value.VNull && project !is Value.VString) {
+                            return onError("Dropped '${map["event"]?.asStringOrNull()}': its project is not a name")
+                        }
+                        current.emit(map.string("event"), map["payload"]?.map().orEmpty(), project.asStringOrNull())
                     }
                     Wire.PROVIDER_ERROR -> onError(params.map()["message"]?.asStringOrNull() ?: "The provider reported an error")
                 }
@@ -62,7 +73,13 @@ class RemoteProvider private constructor(
                 spec,
                 ProviderModule.Dispatch { call ->
                     val answer = CompletableFuture<Value>()
-                    val params = Wire.obj("project" to call.projectId, "function" to spec.qualified(call.function), "args" to call.args.values)
+                    val params =
+                        Wire.obj(
+                            "project" to call.projectId,
+                            "function" to spec.qualified(call.function),
+                            "args" to call.args.values,
+                            Wire.deadline(timeoutMs),
+                        )
                     peer.requestAsync(Wire.PROVIDER_CALL, params, timeoutMs) { result ->
                         when (result) {
                             is CallResult.Ok -> answer.complete(result.value)
@@ -76,13 +93,21 @@ class RemoteProvider private constructor(
     }
 
     override fun start(context: ProviderContext) {
+        val next = generation + 1
+        generation = next
         this.context = context
-        peer.request(Wire.PROVIDER_START, Wire.obj("projects" to Wire.projects(context.projects)), timeoutMs).getOrThrow()
+        try {
+            peer.request(Wire.PROVIDER_START, Wire.obj("projects" to Wire.projects(context.projects), Wire.GENERATION to next), timeoutMs).getOrThrow()
+        } catch (e: Exception) {
+            this.context = null
+            throw e
+        }
     }
 
     override fun stop() {
         context = null
-        peer.request(Wire.PROVIDER_STOP, Value.VNull, timeoutMs)
+        val result = peer.request(Wire.PROVIDER_STOP, Value.VNull, timeoutMs)
+        if (result is CallResult.Err) onError("The provider did not stop cleanly: ${result.message}")
     }
 
     override fun close() {

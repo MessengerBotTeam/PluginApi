@@ -13,6 +13,7 @@ import com.xfl.msgbot.plugin.api.engine.ScriptEngineFactory
 import com.xfl.msgbot.plugin.api.engine.ScriptEvent
 import com.xfl.msgbot.plugin.api.protocol.ProtocolVersion
 import com.xfl.msgbot.plugin.api.rpc.LoopbackTransport
+import com.xfl.msgbot.plugin.api.rpc.PluginTransport
 import com.xfl.msgbot.plugin.api.standard.StandardApi
 import com.xfl.msgbot.plugin.api.value.Value
 import com.xfl.msgbot.plugin.api.value.asObjectOrNull
@@ -31,6 +32,9 @@ class EngineSessionTest {
     private val errors = CopyOnWriteArrayList<String>()
     private val hostThread = EngineThread("host-engine")
     private val callPool = Executors.newCachedThreadPool()
+
+    /** Holds the host's answer to `slow.hang` until the test ends. */
+    private val hostHangs = CountDownLatch(1)
     private val closers = mutableListOf<AutoCloseable>()
 
     private val hostContext =
@@ -47,6 +51,10 @@ class EngineSessionTest {
                             "slow.wait" -> {
                                 Thread.sleep(200)
                                 CallResult.ok(Value.VString("slow"))
+                            }
+                            "slow.hang" -> {
+                                hostHangs.await(20, TimeUnit.SECONDS)
+                                CallResult.ok(Value.VString("too late"))
                             }
                             else -> CallResult.unknownFunction(function)
                         }
@@ -89,6 +97,15 @@ class EngineSessionTest {
                     }
                 "test.throw" -> throw EngineException("handler threw")
                 "test.overflow" -> throw StackOverflowError()
+                "test.hostwait" -> {
+                    waiting = true
+                    val answer = context.host.call("slow.hang", emptyMap())
+                    waiting = false
+                    if (interrupted) {
+                        interrupted = false
+                        throw EngineException("interrupted while the host answered $answer")
+                    }
+                }
                 "test.spin" -> {
                     spinning = true
                     while (!interrupted) Thread.onSpinWait()
@@ -100,10 +117,12 @@ class EngineSessionTest {
 
         @Volatile var spinning = false
 
+        @Volatile var waiting = false
+
         @Volatile var interrupted = false
 
         override fun interrupt() {
-            if (spinning) interrupted = true
+            if (spinning || waiting) interrupted = true
         }
 
         override fun eval(source: String): Value =
@@ -116,8 +135,11 @@ class EngineSessionTest {
         override fun close() = Unit
     }
 
+    private var pluginSide: PluginTransport? = null
+
     private fun connect(factory: ScriptEngineFactory = ScriptEngineFactory(::FakeEngine)): RemoteScriptEngine {
         val (hostSide, pluginSide) = LoopbackTransport.pair()
+        this.pluginSide = pluginSide
         closers += EngineEndpoint(pluginSide, factory, maxPendingEvents = 2)
         return RemoteScriptEngine.connect(hostSide, hostContext, callPool).also { closers += it }
     }
@@ -134,6 +156,7 @@ class EngineSessionTest {
 
     @AfterTest
     fun tearDown() {
+        hostHangs.countDown()
         closers.reversed().forEach { it.close() }
         hostThread.shutdownNow()
         callPool.shutdownNow()
@@ -237,6 +260,34 @@ class EngineSessionTest {
     }
 
     @Test
+    fun `an interrupt frees a script waiting on the host`() {
+        val engine = connect()
+        engine.load(request)
+        val failure = java.util.concurrent.CompletableFuture<Throwable?>()
+        Thread { failure.complete(runCatching { engine.dispatch(ScriptEvent("test.hostwait")) }.exceptionOrNull()) }.start()
+        Thread.sleep(200)
+        assertTrue(!failure.isDone, "still waiting on the host")
+        engine.interrupt()
+        val e = failure.get(2, TimeUnit.SECONDS)
+        assertTrue(e is EngineException && e.message!!.contains("interrupted"), "$e")
+    }
+
+    @Test
+    fun `a dispatch fails at once when the plugin is found gone`() {
+        val engine = connect()
+        engine.load(request)
+        val failure = java.util.concurrent.CompletableFuture<Throwable?>()
+        Thread { failure.complete(runCatching { engine.dispatch(ScriptEvent("test.spin")) }.exceptionOrNull()) }.start()
+        Thread.sleep(200)
+        pluginSide!!.close()
+        // The interrupt cannot be sent, which shows the plugin is gone.
+        engine.interrupt()
+        val e = failure.get(1, TimeUnit.SECONDS)
+        assertTrue(e is EngineException && e.message!!.contains("closed"), "$e")
+        assertEquals(emptyList(), errors.toList())
+    }
+
+    @Test
     fun `the two sides agree on the newest protocol both speak`() {
         val offer = { min: Int, max: Int -> Value.of(mapOf("protocol" to max, "minProtocol" to min)) }
         val agreed = Wire.answerHello(offer(ProtocolVersion.MIN_SUPPORTED, ProtocolVersion.CURRENT + 5))
@@ -244,5 +295,42 @@ class EngineSessionTest {
         val tooNew = Wire.answerHello(offer(ProtocolVersion.CURRENT + 1, ProtocolVersion.CURRENT + 5))
         assertEquals("unavailable", (tooNew as CallResult.Err).code)
         assertFailsWith<IllegalStateException> { Wire.checkHello(CallResult.ok(Value.of(mapOf("protocol" to ProtocolVersion.CURRENT + 1)))) }
+    }
+
+    @Test
+    fun `an event the host stopped waiting for is skipped, not run late`() {
+        val (hostSide, pluginSide) = LoopbackTransport.pair()
+        closers += EngineEndpoint(pluginSide, ScriptEngineFactory(::FakeEngine))
+        val engine = RemoteScriptEngine.connect(hostSide, hostContext, callPool, timeoutMs = 300).also { closers += it }
+        engine.load(request)
+        val spin = java.util.concurrent.CompletableFuture.runAsync { runCatching { engine.dispatch(ScriptEvent("test.spin")) } }
+        Thread.sleep(100)
+        // Queued behind the spinning script until the host gives up on it.
+        assertFailsWith<EngineException> { engine.dispatch(ScriptEvent("bot.message", mapOf("content" to Value.VString("late")))) }
+        Thread.sleep(100)
+        engine.interrupt()
+        spin.get(5, TimeUnit.SECONDS)
+        Thread.sleep(200)
+        assertTrue(hostCalls.none { it.first == "log.write" }, "$hostCalls")
+    }
+
+    @Test
+    fun `a host call the script stopped waiting for is not made late`() {
+        val oneThread = Executors.newSingleThreadExecutor()
+        val (hostSide, pluginSide) = LoopbackTransport.pair()
+        closers += EngineEndpoint(pluginSide, ScriptEngineFactory(::FakeEngine), callTimeoutMs = 300)
+        val engine = RemoteScriptEngine.connect(hostSide, hostContext, oneThread).also { closers += it }
+        try {
+            engine.load(request)
+            // Holds the host's only call thread; the script gives up on it after 300 ms.
+            engine.dispatch(ScriptEvent("test.hostwait"))
+            engine.dispatch(ScriptEvent("bot.message", mapOf("content" to Value.VString("late"))))
+            Thread.sleep(100)
+            hostHangs.countDown()
+            Thread.sleep(300)
+            assertTrue(hostCalls.none { it.first == "log.write" }, "$hostCalls")
+        } finally {
+            oneThread.shutdownNow()
+        }
     }
 }

@@ -5,6 +5,7 @@
 
 package com.xfl.msgbot.plugin.api.remote
 
+import com.xfl.msgbot.plugin.api.call.CallException
 import com.xfl.msgbot.plugin.api.call.CallResult
 import com.xfl.msgbot.plugin.api.engine.EngineContext
 import com.xfl.msgbot.plugin.api.engine.EngineException
@@ -20,6 +21,8 @@ import com.xfl.msgbot.plugin.api.rpc.PluginTransport
 import com.xfl.msgbot.plugin.api.rpc.RpcHandler
 import com.xfl.msgbot.plugin.api.rpc.RpcPeer
 import com.xfl.msgbot.plugin.api.value.Value
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.Semaphore
@@ -30,12 +33,14 @@ import java.util.concurrent.atomic.AtomicBoolean
  * requests. Created per session by [com.xfl.msgbot.plugin.ipc.PluginService].
  *
  * Events beyond [maxPendingEvents] (including the running one) are rejected as unavailable.
+ * [onProtocolError] hears about frames that were lost, such as an answer that could not be sent.
  */
 class EngineEndpoint(
     transport: PluginTransport,
     private val factory: ScriptEngineFactory,
     private val callTimeoutMs: Long = 30_000,
     maxPendingEvents: Int = 64,
+    private val onProtocolError: (String) -> Unit = {},
 ) : AutoCloseable {
     private val closed = AtomicBoolean(false)
     private val eventSlots = Semaphore(maxPendingEvents.also { require(it > 0) })
@@ -45,6 +50,9 @@ class EngineEndpoint(
 
     @Volatile private var startupFailure: String? = null
 
+    /** Blocking host calls in flight; an interrupt answers them, or the script would wait out the host first. */
+    private val waitingCalls = ConcurrentHashMap.newKeySet<CompletableFuture<CallResult>>()
+
     private val context: EngineContext =
         object : EngineContext {
             override val host: HostBridge =
@@ -52,13 +60,26 @@ class EngineEndpoint(
                     override fun call(
                         function: String,
                         args: Map<String, Value>,
-                    ): CallResult = peer.request(Wire.HOST_CALL, Wire.obj("function" to function, "args" to args), callTimeoutMs)
+                    ): CallResult {
+                        val answer = CompletableFuture<CallResult>()
+                        waitingCalls += answer
+                        try {
+                            val params = Wire.obj("function" to function, "args" to args, Wire.deadline(callTimeoutMs))
+                            peer.requestAsync(Wire.HOST_CALL, params, callTimeoutMs, answer::complete)
+                            return answer.get()
+                        } catch (_: InterruptedException) {
+                            Thread.currentThread().interrupt()
+                            return CallResult.unavailable("Interrupted while waiting for '$function'")
+                        } finally {
+                            waitingCalls -= answer
+                        }
+                    }
 
                     override fun callAsync(
                         function: String,
                         args: Map<String, Value>,
                         onResult: (CallResult) -> Unit,
-                    ) = peer.requestAsync(Wire.HOST_CALL, Wire.obj("function" to function, "args" to args), callTimeoutMs) { result ->
+                    ) = peer.requestAsync(Wire.HOST_CALL, Wire.obj("function" to function, "args" to args, Wire.deadline(callTimeoutMs)), callTimeoutMs) { result ->
                         thread.post { onResult(result) }
                     }
                 }
@@ -93,9 +114,14 @@ class EngineEndpoint(
                         }
                     }
                     Wire.ENGINE_DISPATCH -> {
+                        val map =
+                            try {
+                                params.map()
+                            } catch (e: Exception) {
+                                return reply(CallResult.badArgs("Malformed dispatch: ${e.message}"))
+                            }
                         val event =
                             try {
-                                val map = params.map()
                                 ScriptEvent(map.string("event"), map.getValue("payload").map())
                             } catch (e: Exception) {
                                 return reply(CallResult.badArgs("Malformed dispatch: ${e.message}"))
@@ -105,6 +131,8 @@ class EngineEndpoint(
                             eventSlots.release()
                             reply(result)
                         }) { engine ->
+                            // Late after a freeze or behind a stuck event: the host has given up on it.
+                            if (Wire.expired(map)) throw CallException.unavailable("'${event.name}' waited past the host's deadline and was skipped")
                             engine.dispatch(event)
                             Value.VNull
                         }
@@ -145,7 +173,7 @@ class EngineEndpoint(
         }
     }
 
-    private val peer: RpcPeer = RpcPeer(transport, handler)
+    private val peer: RpcPeer = RpcPeer(transport, handler, onProtocolError)
 
     init {
         constructed.countDown()
@@ -178,12 +206,14 @@ class EngineEndpoint(
         }
     }
 
+    /** Interrupts the engine first, so a script freed from a host call stops instead of carrying on. */
     private fun interrupt() {
         try {
             engine?.interrupt()
         } catch (e: Throwable) {
             context.reportError("Interrupting the engine failed: ${e.message ?: e.javaClass.simpleName}", e)
         }
+        waitingCalls.forEach { it.complete(CallResult.unavailable("The script was interrupted")) }
     }
 
     /**

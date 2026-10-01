@@ -106,4 +106,65 @@ class ValueCodecTest {
                 .array()
         assertFailsWith<MalformedFrameException> { ValueCodec.decode(frame, channel) }
     }
+
+    @Test
+    fun `nested collections cannot each claim the whole value budget up front`() {
+        val out = ByteArrayOutputStream()
+        DataOutputStream(out).use { data ->
+            repeat(70) {
+                data.writeByte(7)
+                data.writeInt(ValueCodec.MAX_VALUES - 100)
+            }
+            data.write(ByteArray(ValueCodec.MAX_VALUES))
+        }
+        val before = allocatedBytes()
+        assertFailsWith<MalformedFrameException> { ValueCodec.decode(out.toByteArray()) }
+        assertTrue(allocatedBytes() - before < 64L * 1024 * 1024, "allocated ${(allocatedBytes() - before) shr 20}MB")
+    }
+
+    @Test
+    fun `the encoder refuses what the decoder would, before anything is sent`() {
+        assertFailsWith<IllegalArgumentException> { ValueCodec.encode(Value.VArray(List(ValueCodec.MAX_VALUES) { Value.VNull })) }
+        val offloaded = mutableListOf<Int>()
+        val channel =
+            object : BytesChannel {
+                override fun offload(bytes: ByteArray): Long = offloaded.size.toLong().also { offloaded += bytes.size }
+
+                override fun resolve(
+                    transferId: Long,
+                    length: Int,
+                ): ByteArray = error("not read")
+            }
+        val big = ByteArray(40 shl 20)
+        // The first goes out of band; the others no longer fit the frame's shared budget, and inline they make the frame too big.
+        assertFailsWith<IllegalArgumentException> { ValueCodec.encode(vArray(big, big, big), channel) }
+        assertEquals(1, offloaded.size)
+    }
+
+    @Test
+    fun `a frame sends at most a few payloads out of band and keeps the rest inline`() {
+        val store = mutableMapOf<Long, ByteArray>()
+        val channel =
+            object : BytesChannel {
+                override fun offload(bytes: ByteArray): Long = (store.size + 1L).also { store[it] = bytes }
+
+                override fun resolve(
+                    transferId: Long,
+                    length: Int,
+                ): ByteArray = store.remove(transferId)!!
+            }
+        val value = Value.VArray(List(ValueCodec.MAX_OFFLOADS + 50) { Value.VBytes(ByteArray(20 * 1024) { i -> i.toByte() }) })
+        val frame = ValueCodec.encode(value, channel)
+        assertEquals(ValueCodec.MAX_OFFLOADS, store.size)
+        assertEquals(value, ValueCodec.decode(frame, channel))
+    }
+
+    @Test
+    fun `a lone surrogate arrives as the replacement character`() {
+        val decoded = ValueCodec.decode(ValueCodec.encode(vObject("a\uD83D" to "b\uDE00c 😀")))
+        assertEquals(vObject("a\uFFFD" to "b\uFFFDc 😀"), decoded)
+    }
+
+    private fun allocatedBytes(): Long =
+        (java.lang.management.ManagementFactory.getThreadMXBean() as com.sun.management.ThreadMXBean).currentThreadAllocatedBytes
 }

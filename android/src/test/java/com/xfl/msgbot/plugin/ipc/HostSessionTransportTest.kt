@@ -1,7 +1,11 @@
 package com.xfl.msgbot.plugin.ipc
 
+import android.os.Binder
+import android.os.DeadObjectException
 import android.os.IBinder
 import android.os.SharedMemory
+import com.xfl.msgbot.plugin.api.rpc.TransportClosedException
+import com.xfl.msgbot.plugin.api.serialization.MalformedFrameException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -19,6 +23,7 @@ class HostSessionTransportTest {
         var id: Long = 1,
     ) : IPluginService.Stub() {
         var opens = 0
+        var callback: IPluginCallback? = null
 
         override fun binderVersion() = version
 
@@ -28,6 +33,7 @@ class HostSessionTransportTest {
             callback: IPluginCallback,
         ): Long {
             assertEquals(BinderContract.VERSION, callback.binderVersion())
+            this.callback = callback
             opens++
             return id
         }
@@ -107,6 +113,64 @@ class HostSessionTransportTest {
             }
         val hash = MessageDigest.getInstance("SHA-256").digest(canonical.toByteArray()).joinToString("") { "%02x".format(it) }
         assertEquals(AIDL_V1 to 1, hash to BinderContract.VERSION)
+    }
+
+    @Test
+    fun aDeadPluginClosesTheTransportInsteadOfLookingBusy() {
+        val dead = DeadPlugin()
+        val transport = HostSessionTransport(dead)
+        transport.open("provider", "source")
+        val error = runCatching { transport.send(byteArrayOf(1)) }.exceptionOrNull()
+        assertTrue("$error", error is TransportClosedException)
+    }
+
+    @Test
+    fun sendingAfterCloseIsAClosedTransport() {
+        val transport = HostSessionTransport(Service())
+        transport.open("provider", "source")
+        transport.close()
+        assertTrue(runCatching { transport.send(byteArrayOf(1)) }.exceptionOrNull() is TransportClosedException)
+    }
+
+    @Test
+    fun aRegionThatArrivesAfterCloseIsLetGo() {
+        val service = Service()
+        val transport = HostSessionTransport(service)
+        transport.open("provider", "source")
+        transport.close()
+        service.callback!!.onShared(1, SharedMemory.create("late", 16))
+        assertTrue(runCatching { transport.bytes.resolve(1, 16) }.exceptionOrNull() is MalformedFrameException)
+    }
+
+    /** Answers like a live plugin until asked to carry a frame, then like a dead process. */
+    private class DeadPlugin : IPluginService {
+        private val binder =
+            object : Binder() {
+                override fun isBinderAlive() = false
+            }
+
+        override fun asBinder(): IBinder = binder
+
+        override fun binderVersion() = BinderContract.VERSION
+
+        override fun open(
+            role: String,
+            component: String,
+            callback: IPluginCallback,
+        ) = 1L
+
+        override fun send(
+            session: Long,
+            frame: ByteArray,
+        ): Unit = throw DeadObjectException()
+
+        override fun sendShared(
+            session: Long,
+            transferId: Long,
+            region: SharedMemory,
+        ): Unit = throw DeadObjectException()
+
+        override fun close(session: Long) = Unit
     }
 
     private companion object {

@@ -14,6 +14,7 @@ import com.xfl.msgbot.plugin.api.protocol.ProtocolVersion
 import com.xfl.msgbot.plugin.api.schema.ModuleSpec
 import com.xfl.msgbot.plugin.api.value.Value
 import com.xfl.msgbot.plugin.api.value.asArrayOrNull
+import com.xfl.msgbot.plugin.api.value.asIntOrNull
 import com.xfl.msgbot.plugin.api.value.asLongOrNull
 import com.xfl.msgbot.plugin.api.value.asObjectOrNull
 import com.xfl.msgbot.plugin.api.value.asStringOrNull
@@ -49,6 +50,20 @@ internal object Wire {
 
     const val HELLO_TIMEOUT_MS = 10_000L
 
+    /**
+     * When the asking side stops waiting, in milliseconds since the epoch; both run on one device,
+     * so they share the clock. Work picked up later is skipped, as its answer would be thrown away.
+     */
+    const val DEADLINE = "deadline"
+
+    /** Which `provider.start` an emit belongs to, so one from before a restart is dropped. */
+    const val GENERATION = "generation"
+
+    fun deadline(timeoutMs: Long): Pair<String, Long> = DEADLINE to System.currentTimeMillis() + timeoutMs
+
+    /** Requests without a deadline never expire. */
+    fun expired(params: Map<String, Value>): Boolean = params[DEADLINE]?.asLongOrNull()?.let { System.currentTimeMillis() > it } == true
+
     fun obj(vararg fields: Pair<String, Any?>): Value.VObject = Value.VObject(fields.associate { (k, v) -> k to Value.of(v) })
 
     /** Host's opening request: its protocol range. */
@@ -60,8 +75,8 @@ internal object Wire {
         modules: () -> List<ModuleSpec> = { emptyList() },
     ): CallResult {
         val offer = params.asObjectOrNull().orEmpty()
-        val hostMax = offer["protocol"]?.asLongOrNull()?.toInt() ?: return CallResult.badArgs("The host named no protocol")
-        val hostMin = offer["minProtocol"]?.asLongOrNull()?.toInt() ?: hostMax
+        val hostMax = offer["protocol"]?.asIntOrNull() ?: return CallResult.badArgs("The host named no protocol")
+        val hostMin = offer["minProtocol"]?.asIntOrNull() ?: hostMax
         val agreed =
             ProtocolVersion.negotiate(hostMin, hostMax)
                 ?: return CallResult.unavailable(
@@ -74,7 +89,7 @@ internal object Wire {
     /** Validates the plugin's [hello] reply. */
     fun checkHello(answer: CallResult): Map<String, Value> {
         val map = answer.getOrThrow().asObjectOrNull() ?: throw IllegalStateException("The plugin answered hello with nothing")
-        val protocol = map["protocol"]?.asLongOrNull()?.toInt() ?: throw IllegalStateException("The plugin named no protocol")
+        val protocol = map["protocol"]?.asIntOrNull() ?: throw IllegalStateException("The plugin named no protocol")
         check(protocol in ProtocolVersion.MIN_SUPPORTED..ProtocolVersion.CURRENT) {
             "The plugin chose protocol $protocol; this side speaks ${ProtocolVersion.MIN_SUPPORTED}..${ProtocolVersion.CURRENT}"
         }
