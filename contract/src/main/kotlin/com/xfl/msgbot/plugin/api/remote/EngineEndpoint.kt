@@ -179,6 +179,9 @@ class EngineEndpoint(
         constructed.countDown()
     }
 
+    /** Closed, and the engine's thread has stopped: no script is left running in native code. */
+    val isStopped: Boolean get() = closed.get() && thread.isTerminated
+
     /** Catches Throwable so errors like StackOverflowError still reply and release the event slot. */
     private fun onEngine(
         reply: (CallResult) -> Unit,

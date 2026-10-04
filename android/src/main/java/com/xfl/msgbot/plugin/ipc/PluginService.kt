@@ -10,6 +10,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Binder
 import android.os.IBinder
+import android.os.Process
 import android.os.SharedMemory
 import android.util.Log
 import com.xfl.msgbot.plugin.api.discovery.PluginManifestSchema
@@ -19,8 +20,10 @@ import com.xfl.msgbot.plugin.api.provider.Provider
 import com.xfl.msgbot.plugin.api.remote.EngineEndpoint
 import com.xfl.msgbot.plugin.api.remote.ProviderEndpoint
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.Executors
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ScheduledThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -126,7 +129,22 @@ open class PluginService : Service() {
     private fun ownSession(id: Long): Session? = sessions[id]?.takeIf { it.owner == Binder.getCallingUid() }
 
     /** Closing runs plugin code, such as an engine's interrupt, so it does not hold up the host's call. */
-    private val closer = Executors.newSingleThreadExecutor { r -> Thread(r, "plugin-close").apply { isDaemon = true } }
+    private val closer = ScheduledThreadPoolExecutor(1) { r -> Thread(r, "plugin-close").apply { isDaemon = true } }
+
+    /**
+     * Endpoints closed but still running, typically a script blocked in native code, which no
+     * interrupt reaches. Each keeps its thread and memory (a whole JavaScript heap) until the process ends.
+     */
+    private val stuck = CopyOnWriteArrayList<AutoCloseable>()
+
+    /** How long a closed endpoint may take to stop before it counts as stuck. */
+    internal var stuckAfterMs = STUCK_AFTER_MS
+
+    /**
+     * Ends this process, the only way to free stuck threads. The app sees the plugin die, fails what
+     * waited on it at once, and reconnects the projects that still use it.
+     */
+    internal var restartProcess: () -> Unit = { Process.killProcess(Process.myPid()) }
 
     final override fun onBind(intent: Intent?): IBinder = binder
 
@@ -136,6 +154,12 @@ open class PluginService : Service() {
         val finish = {
             runCatching { session.endpoint.close() }
             session.transport.close()
+            try {
+                closer.schedule({ checkStopped(session.endpoint) }, stuckAfterMs, TimeUnit.MILLISECONDS)
+            } catch (_: RejectedExecutionException) {
+                // The service is being destroyed.
+            }
+            Unit
         }
         try {
             closer.execute(finish)
@@ -143,6 +167,25 @@ open class PluginService : Service() {
             finish()
         }
     }
+
+    private fun checkStopped(endpoint: AutoCloseable) {
+        if (isStopped(endpoint)) return
+        stuck += endpoint
+        stuck.removeAll(::isStopped)
+        Log.w(TAG, "${stuck.size} closed session(s) still running, likely blocked in native code")
+        // Nothing is lost when no session is open; otherwise only once too many have piled up.
+        if (sessions.isEmpty() || stuck.size >= MAX_STUCK) {
+            Log.e(TAG, "Restarting the plugin process to free ${stuck.size} stuck session(s)")
+            restartProcess()
+        }
+    }
+
+    private fun isStopped(endpoint: AutoCloseable): Boolean =
+        when (endpoint) {
+            is EngineEndpoint -> endpoint.isStopped
+            is ProviderEndpoint -> endpoint.isStopped
+            else -> true
+        }
 
     override fun onDestroy() {
         sessions.keys.toList().forEach(::close)
@@ -152,5 +195,7 @@ open class PluginService : Service() {
 
     private companion object {
         const val TAG = "PluginService"
+        const val STUCK_AFTER_MS = 10_000L
+        const val MAX_STUCK = 3
     }
 }
