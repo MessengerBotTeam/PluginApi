@@ -42,6 +42,9 @@ class EngineThread(
 
     val isShutdown: Boolean get() = executor.isShutdown
 
+    /** Shut down and nothing left running, not even a task stuck in native code. */
+    val isTerminated: Boolean get() = executor.isTerminated
+
     /** Throws [RejectedExecutionException] once the thread is shut down. */
     override fun execute(command: Runnable) = executor.execute(command)
 

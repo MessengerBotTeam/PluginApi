@@ -190,6 +190,9 @@ class ProviderEndpoint(
         constructed.countDown()
     }
 
+    /** Closed, and the provider's thread has stopped. */
+    val isStopped: Boolean get() = closed.get() && thread.isTerminated
+
     private fun stopRunning(provider: Provider) {
         val current = running ?: return
         running = null
