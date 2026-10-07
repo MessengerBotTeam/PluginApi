@@ -48,6 +48,19 @@ internal object Wire {
     const val PROVIDER_EMIT = "provider.emit"
     const val PROVIDER_ERROR = "provider.error"
 
+    // Tooling role: host -> plugin.
+    const val TOOLING_CONFIGURE = "tooling.configure"
+    const val TOOLING_SYNC = "tooling.sync"
+    const val TOOLING_DIAGNOSTICS = "tooling.diagnostics"
+    const val TOOLING_COMPLETE = "tooling.complete"
+    const val TOOLING_HOVER = "tooling.hover"
+    const val TOOLING_SIGNATURE = "tooling.signature"
+
+    // Tooling role: plugin -> host.
+    const val TOOLING_READ = "tooling.read"
+    const val TOOLING_LIST = "tooling.list"
+    const val TOOLING_ERROR = "tooling.error"
+
     const val HELLO_TIMEOUT_MS = 10_000L
 
     /**
@@ -72,6 +85,7 @@ internal object Wire {
     /** Plugin's reply to [hello]: agreed protocol and, for a provider, its [modules]. Unavailable if ranges do not overlap. */
     fun answerHello(
         params: Value,
+        extra: () -> Map<String, Any?> = { emptyMap() },
         modules: () -> List<ModuleSpec> = { emptyList() },
     ): CallResult {
         val offer = params.asObjectOrNull().orEmpty()
@@ -83,7 +97,7 @@ internal object Wire {
                     "This plugin speaks protocol ${ProtocolVersion.MIN_SUPPORTED}..${ProtocolVersion.CURRENT}; " +
                         "the host speaks $hostMin..$hostMax",
                 )
-        return CallResult.ok(obj("protocol" to agreed, "modules" to modules().map { it.toValue() }))
+        return CallResult.ok(obj("protocol" to agreed, "modules" to modules().map { it.toValue() }, *extra().toList().toTypedArray()))
     }
 
     /** Validates the plugin's [hello] reply. */
