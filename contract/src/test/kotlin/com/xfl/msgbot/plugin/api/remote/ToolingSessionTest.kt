@@ -200,4 +200,25 @@ class ToolingSessionTest {
             broken.close()
         }
     }
+
+    @Test
+    fun `configure may take longer than a question`() {
+        val pair = LoopbackTransport.pair()
+        val slow =
+            object : LanguageTools {
+                override val capabilities = setOf(ToolingCapability.DIAGNOSTICS)
+
+                override fun configure(workspace: ToolingWorkspace) = Thread.sleep(400)
+
+                override fun sync(change: ToolingChange) = Unit
+            }
+        val endpoint = ToolingEndpoint(pair.second, ToolingFactory { slow })
+        val patient = RemoteLanguageTools.connect(pair.first, host, callExecutor, timeoutMs = 100, setupTimeoutMs = 5_000)
+        try {
+            patient.configure(ToolingWorkspace("javascript"))
+        } finally {
+            patient.close()
+            endpoint.close()
+        }
+    }
 }

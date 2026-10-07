@@ -33,6 +33,8 @@ import java.util.concurrent.Semaphore
  * answer within [timeoutMs]; [diagnostics], [complete], [hover] and [signatureHelp] carry that
  * deadline, so a plugin that falls behind skips the questions that are already stale.
  *
+ * [configure] may take [setupTimeoutMs] instead, since a tooling often loads its compiler there.
+ *
  * The plugin's reads of [files] run on [callExecutor], so a slow disk does not hold the transport.
  */
 class RemoteLanguageTools private constructor(
@@ -40,6 +42,7 @@ class RemoteLanguageTools private constructor(
     private val files: ToolingHost,
     private val callExecutor: Executor,
     private val timeoutMs: Long,
+    private val setupTimeoutMs: Long,
     maxPendingCalls: Int,
     private val onError: (String) -> Unit,
 ) : LanguageTools {
@@ -102,7 +105,7 @@ class RemoteLanguageTools private constructor(
     private val peer = RpcPeer(transport, handler, onError)
 
     override fun configure(workspace: ToolingWorkspace) {
-        peer.request(Wire.TOOLING_CONFIGURE, ToolingWire.workspace(workspace), timeoutMs).getOrThrow()
+        peer.request(Wire.TOOLING_CONFIGURE, ToolingWire.workspace(workspace), setupTimeoutMs).getOrThrow()
     }
 
     override fun sync(change: ToolingChange) {
@@ -148,10 +151,11 @@ class RemoteLanguageTools private constructor(
             files: ToolingHost,
             callExecutor: Executor,
             timeoutMs: Long = 10_000,
+            setupTimeoutMs: Long = 60_000,
             maxPendingCalls: Int = 32,
             onError: (String) -> Unit = {},
         ): RemoteLanguageTools {
-            val tools = RemoteLanguageTools(transport, files, callExecutor, timeoutMs, maxPendingCalls, onError)
+            val tools = RemoteLanguageTools(transport, files, callExecutor, timeoutMs, setupTimeoutMs, maxPendingCalls, onError)
             try {
                 val hello = Wire.checkHello(tools.peer.request(Wire.HELLO, Wire.hello(), Wire.HELLO_TIMEOUT_MS))
                 tools.capabilities =
