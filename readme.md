@@ -6,7 +6,7 @@ MessengerBotR의 플러그인 계약이다. 현재 개발 버전은 `0.1.0-SNAPS
 
 | 모듈 | 내용 |
 |---|---|
-| `contract` | 값, API 스키마, 표준 모듈, 엔진·제공자 SPI, 대칭 RPC. Android에 의존하지 않는다. |
+| `contract` | 값, API 스키마, 표준 모듈, 엔진·제공자·도구 SPI, 대칭 RPC. Android에 의존하지 않는다. |
 | `android` | `PluginService`, Binder 세션, 공유 메모리 전송 |
 | `tck` | 엔진과 제공자를 호스트 없이 돌려 보는 `EngineHarness`, `ProviderHarness`. JavaScript 엔진의 적합성 테스트(`JavaScriptEngineConformance`)와 제공자의 적합성 테스트(`ProviderConformance`) |
 
@@ -45,6 +45,37 @@ MessengerBotR의 플러그인 계약이다. 현재 개발 버전은 `0.1.0-SNAPS
 - **재시작 전의 이벤트는 새 시작에 섞이지 않는다.** `provider.start`마다 세대 번호가 붙고, 이전 세대가 보낸 emit은 호스트가 버린다. 멈춘 제공자가 emit하면 버리고 오류로 알리며, 멈출 때 아직 답하지 않은 비동기 호출은 `unavailable`로 끝낸다. 멈춘 제공자로 온 호출도 실행하지 않는다.
 - **세션은 서로 막지 않는다.** 한 플러그인의 세션은 모두 Binder 객체 하나를 쓰지만, 프레임은 세션마다 자기 스레드에서 처리한다. 세션은 연 앱만 쓰고 닫을 수 있다.
 - **멈춘 스레드는 쌓이지 않는다.** 네이티브 코드에서 막힌 스크립트는 interrupt가 닿지 않아, 세션을 닫아도 그 스레드와 메모리가 남는다. `PluginService`는 닫은 세션이 10초 안에 멈추지 않으면 기록하고, 열린 세션이 없거나 그런 세션이 3개가 되면 플러그인 프로세스를 끝낸다. 앱은 플러그인이 죽은 것을 보고 기다리던 요청을 바로 실패시킨 뒤, 아직 쓰는 프로젝트를 다시 연결한다.
+
+## 에디터 도구(Tooling)
+
+엔진, 프로필, 제공자 외에 네 번째 컴포넌트가 하나 더 있다. 에디터가 언어를 이해하도록 돕는 **도구**다. 도구는 스크립트를 실행하지 않는다. 호스트가 편집 중인 텍스트를 보내면 진단(오류와 경고), 자동완성, 호버, 시그니처 도움말로 답한다.
+
+```xml
+<msgbot-plugin protocol="0">
+    <tooling id="ts-tools" label="@string/ts_tools" languages="javascript typescript" />
+</msgbot-plugin>
+```
+
+```kotlin
+class MyPluginService : PluginService() {
+    override val tooling = mapOf("ts-tools" to ToolingFactory(::TypeScriptTools))
+}
+
+class TypeScriptTools(private val context: ToolingContext) : LanguageTools {
+    override val capabilities = setOf(ToolingCapability.DIAGNOSTICS, ToolingCapability.COMPLETION)
+    override fun configure(workspace: ToolingWorkspace) { /* 선언 파일(workspace.libs)로 새로 시작 */ }
+    override fun sync(change: ToolingChange) { /* 바뀐 파일 반영 */ }
+    override fun diagnostics(path: String): List<ToolDiagnostic> = analyze(path)
+    override fun complete(path: String, offset: Int): List<ToolCompletion> = completionsAt(path, offset)
+}
+```
+
+- **서버가 아니다.** 호스트가 요청하고 도구가 답하는 함수 호출이다. JSON-RPC나 별도 프로세스가 없다. 언어 서버를 감싸서 구현해도 되고, 라이브러리를 직접 불러도 된다.
+- **텍스트를 호스트가 보낸다.** `configure`가 작업 공간(언어, 옵션, 프로젝트가 쓰는 API 선언 같은 `libs`)을 정하고, `sync`가 편집한 파일을 알린다. 이어서 `diagnostics`, `complete`, `hover`, `signatureHelp`로 묻는다. 위치는 파일 처음부터 센 UTF-16 코드 단위다.
+- **할 수 있는 것만 구현한다.** 필요한 함수만 재정의하고 `capabilities`에 적는다. 호스트는 적지 않은 것을 묻지 않는다.
+- **파일은 읽기만 한다.** `ToolingContext.host.read`와 `list`로 호스트가 허락한 파일만 읽는다. 가져오는 모듈(`node_modules` 같은 것)을 따라갈 때 쓴다. 호출은 답이 올 때까지 막히므로 도구 스레드에서 부르고 읽은 것은 캐시한다.
+- **도구의 호출은 한 스레드에서 차례로 온다.** 호스트가 기다리기를 그만둔 질문은 차례가 와도 실행하지 않는다. 입력이 빠를 때 오래된 분석이 쌓이지 않게 하기 위해서다. `configure`와 `sync`는 건너뛰지 않는다.
+- **호스트가 같은 계약으로 쓴다.** `RemoteLanguageTools`가 호스트 쪽 프록시이고 `LanguageTools`를 구현한다. 도구가 시작하지 못하거나 질문이 실패하면 호출한 쪽이 `CallException`을 받는다.
 
 ## 플러그인 만들기
 

@@ -19,6 +19,8 @@ import com.xfl.msgbot.plugin.api.engine.ScriptEngineFactory
 import com.xfl.msgbot.plugin.api.provider.Provider
 import com.xfl.msgbot.plugin.api.remote.EngineEndpoint
 import com.xfl.msgbot.plugin.api.remote.ProviderEndpoint
+import com.xfl.msgbot.plugin.api.remote.ToolingEndpoint
+import com.xfl.msgbot.plugin.api.tooling.ToolingFactory
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.RejectedExecutionException
@@ -34,6 +36,7 @@ import java.util.concurrent.atomic.AtomicLong
  * class MyPluginService : PluginService() {
  *     override val engines = mapOf("luaj" to ScriptEngineFactory(::LuaEngine))
  *     override val providers = mapOf("weather" to ::WeatherProvider)
+ *     override val tooling = mapOf("ts-tools" to ToolingFactory(::TypeScriptTools))
  * }
  * ```
  *
@@ -43,6 +46,7 @@ import java.util.concurrent.atomic.AtomicLong
 open class PluginService : Service() {
     protected open val engines: Map<String, ScriptEngineFactory> = emptyMap()
     protected open val providers: Map<String, () -> Provider> = emptyMap()
+    protected open val tooling: Map<String, ToolingFactory> = emptyMap()
 
     private class Session(
         val callback: IPluginCallback,
@@ -86,6 +90,12 @@ open class PluginService : Service() {
                                     transport,
                                     onProtocolError = lost,
                                     factory = providers[component] ?: throw IllegalArgumentException("This plugin has no provider '$component'"),
+                                )
+                            PluginRole.TOOLING ->
+                                ToolingEndpoint(
+                                    transport,
+                                    tooling[component] ?: throw IllegalArgumentException("This plugin has no tooling '$component'"),
+                                    onProtocolError = lost,
                                 )
                             else -> throw IllegalArgumentException("Unknown role '$role'")
                         }
@@ -184,6 +194,7 @@ open class PluginService : Service() {
         when (endpoint) {
             is EngineEndpoint -> endpoint.isStopped
             is ProviderEndpoint -> endpoint.isStopped
+            is ToolingEndpoint -> endpoint.isStopped
             else -> true
         }
 

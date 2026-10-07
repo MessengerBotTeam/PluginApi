@@ -22,6 +22,7 @@ object PluginManifestSchema {
     const val TAG_LANGUAGE = "language"
     const val TAG_PROFILE = "profile"
     const val TAG_PROVIDER = "provider"
+    const val TAG_TOOLING = "tooling"
     const val TAG_OPTION = "option"
 
     /** Root attribute: the plugin's [com.xfl.msgbot.plugin.api.protocol.ProtocolVersion.CURRENT]. */
@@ -58,6 +59,10 @@ object PluginManifestSchema {
     /** Space-separated namespaces. Publishing an unlisted namespace is refused. */
     const val ATTR_PROVIDES = "provides"
 
+    // <tooling>
+    /** Space-separated language names (`<language name>`) the tooling serves, such as `javascript typescript`. */
+    const val ATTR_LANGUAGES = "languages"
+
     // <option>
     const val ATTR_KEY = "key"
     const val ATTR_TYPE = "type"
@@ -70,4 +75,5 @@ object PluginManifestSchema {
 object PluginRole {
     const val ENGINE = "engine"
     const val PROVIDER = "provider"
+    const val TOOLING = "tooling"
 }
