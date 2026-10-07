@@ -182,6 +182,8 @@ class ToolingSessionTest {
         assertTrue(tools.holding.await(5, TimeUnit.SECONDS))
         val stale = Executors.newSingleThreadExecutor().submit<Any?> { runCatching { remote.diagnostics("/stale.js") }.exceptionOrNull() }
         assertTrue(stale.get(5, TimeUnit.SECONDS) is CallException, "the host stops waiting while the tooling is busy")
+        val pastTheDeadlineMs = 100L
+        Thread.sleep(pastTheDeadlineMs)
         tools.release.countDown()
         slow.get(5, TimeUnit.SECONDS)
 
