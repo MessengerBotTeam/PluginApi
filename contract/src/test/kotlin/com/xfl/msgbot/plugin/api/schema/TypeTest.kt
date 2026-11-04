@@ -164,4 +164,12 @@ class TypeConstraintTest {
         assertEquals(Type.handle("image").nullable(), message.getValue("image").type)
         assertEquals(Type.handle("reply").nullable(), StandardApi.Bot.function("reply")!!.params.first { it.name == "token" }.type)
     }
+
+    @Test
+    fun `the standard message has optional host-set fields for injected messages`() {
+        val message = StandardApi.Bot.event("message")!!.fields.associateBy { it.name }
+        assertEquals(Type.BOOL.nullable(), message.getValue("isInjected").type)
+        assertEquals(Type.STRING.nullable(), message.getValue("injectedBy").type)
+        assertTrue(message.getValue("isInjected").optional && message.getValue("injectedBy").optional)
+    }
 }

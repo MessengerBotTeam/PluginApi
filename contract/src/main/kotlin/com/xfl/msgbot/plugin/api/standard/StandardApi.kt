@@ -163,6 +163,8 @@ object StandardApi {
                 optional("isMention", Type.BOOL)
                 optional("isMultiChat", Type.BOOL)
                 optional("isDebugRoom", Type.BOOL, doc = "Set by the host for the debug room; providers leave it out")
+                optional("isInjected", Type.BOOL, doc = "Set by the host when a sandbox handed this message over instead of a messenger; providers leave it out")
+                optional("injectedBy", Type.STRING, doc = "The name of the sandbox that handed this message over; set by the host together with isInjected")
                 optional("image", Type.handle("image"), doc = "An image token")
                 optional("replyToken", Type.handle("reply"), doc = "Absent when this message cannot be answered by token")
                 optional("readToken", Type.handle("read"))
