@@ -181,8 +181,11 @@ object StandardApi {
 
     val HOST: List<ModuleSpec> = listOf(Project, Log, File, Db, Http, Device, Sys)
 
+    /** The host's sandbox module, which only the host side adds, so it is not in [HOST]. */
+    const val SANDBOX_NAMESPACE = "sandbox"
+
     /** Namespaces providers may not publish. */
-    val HOST_NAMESPACES: Set<String> = HOST.map { it.namespace }.toSet()
+    val HOST_NAMESPACES: Set<String> = HOST.map { it.namespace }.toSet() + SANDBOX_NAMESPACE
 
     /** Standards a provider may implement in part. */
     val STANDARDS: Map<String, ModuleSpec> = listOf(Bot).associateBy { it.namespace }
