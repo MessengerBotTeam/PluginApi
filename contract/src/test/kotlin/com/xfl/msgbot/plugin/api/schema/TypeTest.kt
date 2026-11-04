@@ -1,5 +1,6 @@
 package com.xfl.msgbot.plugin.api.schema
 
+import com.xfl.msgbot.plugin.api.standard.StandardApi
 import com.xfl.msgbot.plugin.api.value.Value
 import com.xfl.msgbot.plugin.api.value.vArray
 import com.xfl.msgbot.plugin.api.value.vObject
@@ -144,5 +145,23 @@ class TypeConstraintTest {
     fun `conform still drops unknown struct fields under a limit`() {
         val type = Type.parse("list<{a: int}>[..5]")
         assertEquals(vArray(vObject("a" to 1)), type.conform(vArray(vObject("a" to 1, "b" to 2))))
+    }
+
+    @Test
+    fun `a plain string fits a handle in the standard, other types do not`() {
+        assertTrue(Type.STRING.fits(Type.handle("reply")))
+        assertTrue(Type.STRING.nullable().fits(Type.handle("reply").nullable()))
+        assertTrue(Type.handle("reply").fits(Type.handle("reply")))
+        assertTrue(!Type.INT.fits(Type.handle("reply")))
+        assertTrue(!Type.handle("read").fits(Type.handle("reply")))
+    }
+
+    @Test
+    fun `the standard bot module marks its tokens as handles`() {
+        val message = StandardApi.Bot.event("message")!!.fields.associateBy { it.name }
+        assertEquals(Type.handle("reply").nullable(), message.getValue("replyToken").type)
+        assertEquals(Type.handle("read").nullable(), message.getValue("readToken").type)
+        assertEquals(Type.handle("image").nullable(), message.getValue("image").type)
+        assertEquals(Type.handle("reply").nullable(), StandardApi.Bot.function("reply")!!.params.first { it.name == "token" }.type)
     }
 }

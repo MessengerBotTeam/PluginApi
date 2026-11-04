@@ -112,7 +112,7 @@ object StandardApi {
                 doc = "Answer a message. Pass its token and its address; the provider uses what it understands.",
             ) {
                 param("text", Type.STRING)
-                optional("token", Type.STRING, doc = "The message's replyToken, meaningful to the provider that issued it")
+                optional("token", Type.handle("reply"), doc = "The message's replyToken, meaningful to the provider that issued it")
                 optional("room", Type.STRING)
                 optional("channelId", Type.STRING)
                 optional("packageName", Type.STRING)
@@ -131,7 +131,7 @@ object StandardApi {
                 optional("packageName", Type.STRING)
             }
             function("markRead", returns = Type.BOOL, doc = "Mark a message, or its room up to now, as read.") {
-                optional("token", Type.STRING, doc = "The message's readToken, meaningful to the provider that issued it")
+                optional("token", Type.handle("read"), doc = "The message's readToken, meaningful to the provider that issued it")
                 optional("room", Type.STRING)
                 optional("channelId", Type.STRING)
                 optional("packageName", Type.STRING)
@@ -141,7 +141,7 @@ object StandardApi {
                 returns = Type.BYTES.nullable(),
                 doc = "The bytes behind an image token, while the provider still has them.",
             ) {
-                param("token", Type.STRING)
+                param("token", Type.handle("image"))
             }
 
             event("message") {
@@ -152,7 +152,7 @@ object StandardApi {
                     Type.struct {
                         field("name", Type.STRING)
                         optional("hash", Type.STRING, doc = "A stable ID of the author, where the messenger has one")
-                        optional("avatar", Type.STRING, doc = "An image token")
+                        optional("avatar", Type.handle("image"), doc = "An image token")
                     },
                 )
                 optional("channelId", Type.STRING, doc = "IDs are strings so no language rounds them.")
@@ -163,9 +163,9 @@ object StandardApi {
                 optional("isMention", Type.BOOL)
                 optional("isMultiChat", Type.BOOL)
                 optional("isDebugRoom", Type.BOOL, doc = "Set by the host for the debug room; providers leave it out")
-                optional("image", Type.STRING, doc = "An image token")
-                optional("replyToken", Type.STRING, doc = "Absent when this message cannot be answered by token")
-                optional("readToken", Type.STRING)
+                optional("image", Type.handle("image"), doc = "An image token")
+                optional("replyToken", Type.handle("reply"), doc = "Absent when this message cannot be answered by token")
+                optional("readToken", Type.handle("read"))
                 optional("extra", Type.map(Type.ANY), doc = "What only this provider knows, such as attachments or the message type.")
             }
         }

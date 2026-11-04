@@ -284,6 +284,8 @@ fun Type.nullable(): Type = if (this is Type.Nullable) this else Type.Nullable(t
 internal fun Type.fits(standard: Type): Boolean =
     when {
         this == standard -> true
+        // A provider written before handles existed declares its tokens as plain strings.
+        this == Type.Primitive.STRING && standard is Type.Handle -> true
         this is Type.Nullable && standard is Type.Nullable -> inner.fits(standard.inner)
         this is Type.ListOf && standard is Type.ListOf -> item.fits(standard.item)
         this is Type.MapOf && standard is Type.MapOf -> value.fits(standard.value)
