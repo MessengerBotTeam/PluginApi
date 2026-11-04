@@ -69,7 +69,7 @@ globalThis.onMessage = (handler) => events.on('bot.message', (m) => handler({
 | `VArray` | `Array` (`undefined` 원소는 `null`) | `Array` |
 | `VObject` | 평범한 객체 (`undefined`인 속성은 뺀다) | 평범한 객체 |
 
-함수, 심볼, 클래스 인스턴스 같은 다른 값은 넘길 수 없다. 자기 자신을 가리키는 객체나 배열, 64단계보다 깊게 중첩된 값도 넘길 수 없다. 이런 값을 넘기면 `__host_call`과 `__host_call_async` 모두 호출한 자리에서 `TypeError`를 던지며, 호스트에는 아무것도 전달되지 않는다.
+함수, 심볼, `Date`, 클래스 인스턴스(프로토타입이 `Object.prototype`도 `null`도 아닌 객체) 같은 다른 값은 넘길 수 없다. getter나 setter가 있는 속성을 가진 객체도 넘길 수 없고, 이때 getter는 실행하지 않는다. 자기 자신을 가리키는 객체나 배열, 64단계보다 깊게 중첩된 값도 넘길 수 없다. `__proto__`는 프로토타입이 아니라 일반 키로 오간다. 이런 값을 넘기면 `__host_call`과 `__host_call_async` 모두 호출한 자리에서 `TypeError`를 던지며, 호스트에는 아무것도 전달되지 않는다.
 
 ## 오류
 

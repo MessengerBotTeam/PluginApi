@@ -172,6 +172,71 @@ abstract class JavaScriptEngineConformance {
         assertTrue(harness.calls.isEmpty(), "the host never saw them: ${harness.calls}")
     }
 
+    private fun assertRefused(
+        setup: String,
+        value: String,
+    ) {
+        load(
+            """
+            $setup
+            var sync, async;
+            try { __host_call('tck.echo', { value: $value }); } catch (e) { sync = e instanceof TypeError; }
+            try { __host_call_async('tck.echo', { value: $value }); } catch (e) { async = e instanceof TypeError; }
+            """.trimIndent(),
+        )
+        assertEquals(Value.VString("true/true"), eval("sync + '/' + async"))
+        assertTrue(harness.calls.isEmpty(), "the host never saw them: ${harness.calls}")
+    }
+
+    @Test
+    fun classInstancesAreRefused() = assertRefused("function Point() { this.x = 1; }", "new Point()")
+
+    @Test
+    fun datesAreRefused() = assertRefused("", "new Date(0)")
+
+    @Test
+    fun circularValuesAreRefused() = assertRefused("var loop = {}; loop.self = loop;", "loop")
+
+    @Test
+    fun valuesNestedTooDeepAreRefused() =
+        assertRefused("var deep = {}; var at = deep; for (var i = 0; i < 100; i++) { at.next = {}; at = at.next; }", "deep")
+
+    @Test
+    fun accessorPropertiesAreRefusedWithoutRunningThem() {
+        load(
+            """
+            var ran = false;
+            var withGetter = {};
+            Object.defineProperty(withGetter, 'x', { enumerable: true, get: function () { ran = true; return 1; } });
+            var refused;
+            try { __host_call('tck.echo', { value: withGetter }); } catch (e) { refused = e instanceof TypeError; }
+            """.trimIndent(),
+        )
+        assertEquals(Value.VString("true/false"), eval("refused + '/' + ran"))
+        assertTrue(harness.calls.isEmpty(), "the host never saw them: ${harness.calls}")
+    }
+
+    @Test
+    fun aProtoKeyStaysAnOrdinaryKeyBothWays() {
+        load(
+            """
+            var sent = JSON.parse('{"__proto__": {"polluted": 1}}');
+            var back = __host_call('tck.echo', { value: sent });
+            var report = [
+                Object.getPrototypeOf(back) === Object.prototype,
+                Object.prototype.hasOwnProperty.call(back, '__proto__'),
+                back.polluted === undefined,
+                ({}).polluted === undefined
+            ].join(',');
+            """.trimIndent(),
+        )
+        assertEquals(Value.VString("true,true,true,true"), eval("report"))
+        assertEquals(
+            listOf(mapOf("value" to vObject("__proto__" to vObject("polluted" to 1L)))),
+            harness.calls.filter { it.function == "tck.echo" }.map { it.args },
+        )
+    }
+
     @Test
     fun dispatchCallsDispatchWithNameAndPayloadAndWaitsForItsHostCalls() {
         load(
