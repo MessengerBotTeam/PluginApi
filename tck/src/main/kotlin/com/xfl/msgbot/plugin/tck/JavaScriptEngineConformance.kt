@@ -189,6 +189,15 @@ abstract class JavaScriptEngineConformance {
     }
 
     @Test
+    fun anEvalResultThatIsNotPlainDataIsShownAsText() {
+        load("var holder = { get: function get() {}, n: 1 };")
+        val object_ = eval("holder")
+        assertTrue(object_ is Value.VString && "[Function: get]" in object_.value, "shown as text: $object_")
+        assertTrue(eval("(function get() {})") is Value.VString, "a function is shown as text too")
+        assertEquals(Value.VInt(42), eval("6 * 7"))
+    }
+
+    @Test
     fun classInstancesAreRefused() = assertRefused("function Point() { this.x = 1; }", "new Point()")
 
     @Test

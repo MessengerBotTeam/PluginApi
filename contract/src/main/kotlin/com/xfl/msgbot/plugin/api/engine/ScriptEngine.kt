@@ -23,7 +23,12 @@ interface ScriptEngine : AutoCloseable {
     /** Calls `__dispatch(name, payload)`. Returns after synchronous handlers finish; async work is not awaited. */
     fun dispatch(event: ScriptEvent)
 
-    /** Evaluates [source] in the global scope. For tests and a REPL. */
+    /**
+     * Evaluates [source] in the global scope. For tests and a REPL.
+     *
+     * A result that cannot cross as a [Value], such as a function or an object holding functions, is
+     * not an error: it comes back as a string that shows it, in the language's own notation.
+     */
     fun eval(source: String): Value
 
     /**
