@@ -76,3 +76,73 @@ class TypeTest {
         assertTrue(error.startsWith("value.${"k".repeat(64)}…[1]: expected int"), error)
     }
 }
+
+class TypeConstraintTest {
+    @Test
+    fun `enums, limits and handles read back to the same text`() {
+        listOf(
+            "enum<ko|en|ja>",
+            "enum<a>?",
+            "string[..100]",
+            "string[1..100]?",
+            "int[0..]",
+            "int[-5..5]",
+            "list<string>[..10]",
+            "map<int>[1..]",
+            "bytes[..1024]",
+            "handle<reply>",
+            "{kind: enum<a|b>, name: string[..8], tokens: list<handle<image>>[..3]}",
+        ).forEach { text -> assertEquals(text, Type.parse(text).toString()) }
+    }
+
+    @Test
+    fun `malformed constraints are refused`() {
+        listOf(
+            "enum<>", "enum<a|a>", "enum<a b>", "enum<a", "bool[..1]", "{a: int}[..1]", "string[..]", "string[5..1]", "string[1.2]",
+            "handle<>", "handle<a b>", "any[..1]", "string[..99999999999999999999]",
+        ).forEach { text -> assertFailsWith<IllegalArgumentException>(text) { Type.parse(text) } }
+    }
+
+    @Test
+    fun `an enum takes only its own values`() {
+        val type = Type.parse("enum<ko|en>")
+        assertNull(type.check(Value.VString("ko")))
+        assertTrue(type.check(Value.VString("fr"))!!.contains("expected one of"))
+        assertTrue(type.check(Value.VInt(1))!!.contains("expected enum<ko|en>"))
+    }
+
+    @Test
+    fun `a limit checks length, size or value`() {
+        assertNull(Type.parse("string[..3]").check(Value.VString("abc")))
+        assertEquals("value: length 4 is above the maximum 3", Type.parse("string[..3]").check(Value.VString("abcd")))
+        assertEquals("value: length 0 is below the minimum 1", Type.parse("list<int>[1..]").check(vArray()))
+        assertEquals("value: size 2 is above the maximum 1", Type.parse("map<int>[..1]").check(vObject("a" to 1, "b" to 2)))
+        assertEquals("value: size 3 is above the maximum 2", Type.parse("bytes[..2]").check(Value.VBytes(byteArrayOf(1, 2, 3))))
+        assertNull(Type.parse("int[0..100]").check(Value.VInt(100)))
+        assertEquals("value: value 101 is above the maximum 100", Type.parse("int[0..100]").check(Value.VInt(101)))
+        assertTrue(Type.parse("double[0..1]").check(Value.VDouble(1.5))!!.contains("above the maximum"))
+        assertTrue(Type.parse("string[..3]").check(Value.VInt(1))!!.contains("expected string"))
+        assertNull(Type.parse("string[..3]?").check(Value.VNull))
+    }
+
+    @Test
+    fun `a limit applies to the items of a list too`() {
+        val type = Type.parse("list<string[..2]>[..2]")
+        assertNull(type.check(vArray("a", "bc")))
+        assertEquals("value[1]: length 3 is above the maximum 2", type.check(vArray("a", "bcd")))
+        assertTrue(type.check(vArray("a", "b", "c"))!!.contains("above the maximum 2"))
+    }
+
+    @Test
+    fun `a handle is a string that names something the host keeps`() {
+        val type = Type.parse("handle<reply>")
+        assertNull(type.check(Value.VString("provider-1")))
+        assertTrue(type.check(Value.VInt(1))!!.contains("expected handle<reply>"))
+    }
+
+    @Test
+    fun `conform still drops unknown struct fields under a limit`() {
+        val type = Type.parse("list<{a: int}>[..5]")
+        assertEquals(vArray(vObject("a" to 1)), type.conform(vArray(vObject("a" to 1, "b" to 2))))
+    }
+}
