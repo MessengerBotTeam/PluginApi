@@ -106,6 +106,78 @@ sealed interface Type {
         override fun toString(): String = "map<$value>"
     }
 
+    /** A string that is one of [values], written `enum<a|b>`. */
+    data class Enum(val values: List<String>) : Type {
+        init {
+            require(values.isNotEmpty()) { "An enum needs at least one value" }
+            require(values.distinct().size == values.size) { "An enum lists a value twice: $values" }
+            values.forEach { require(it.isNotEmpty() && it.all { c -> isWordChar(c) }) { "'$it' is not a valid enum value" } }
+        }
+
+        override fun checkAt(value: Value, path: Path): String? =
+            when {
+                value !is Value.VString -> mismatch(path, this, value)
+                value.value in values -> null
+                else -> "$path: expected one of $values, got '${value.value.take(MAX_SHOWN)}'"
+            }
+
+        override fun toString(): String = values.joinToString("|", "enum<", ">")
+    }
+
+    /**
+     * A string that names something the host keeps for the plugin, such as a message token, written
+     * `handle<kind>`. It travels as a string; the kind tells the host which table to look it up in.
+     */
+    data class Handle(val kind: String) : Type {
+        init {
+            require(kind.isNotEmpty() && kind.all { c -> isWordChar(c) }) { "'$kind' is not a valid handle kind" }
+        }
+
+        override fun checkAt(value: Value, path: Path): String? = if (value is Value.VString) null else mismatch(path, this, value)
+
+        override fun toString(): String = "handle<$kind>"
+    }
+
+    /**
+     * [inner] with a limit on its size, written `string[..100]`, `list<int>[1..10]` or `int[0..]`: the
+     * length of a string, bytes, list or map, or the value of an int or double. Either end may be left out.
+     */
+    data class Bounded(val inner: Type, val min: Long?, val max: Long?) : Type {
+        init {
+            require(
+                inner is ListOf || inner is MapOf ||
+                    inner == Primitive.STRING || inner == Primitive.BYTES || inner == Primitive.INT || inner == Primitive.DOUBLE,
+            ) { "'$inner' cannot have a limit" }
+            require(min != null || max != null) { "A limit needs a minimum or a maximum" }
+            require(min == null || max == null || min <= max) { "The minimum $min is above the maximum $max" }
+        }
+
+        override fun checkAt(value: Value, path: Path): String? {
+            inner.checkAt(value, path)?.let { return it }
+            val (what, measured) =
+                when (value) {
+                    is Value.VString -> "length" to value.value.length.toDouble()
+                    is Value.VBytes -> "size" to value.value.size.toDouble()
+                    is Value.VArray -> "length" to value.items.size.toDouble()
+                    is Value.VObject -> "size" to value.entries.size.toDouble()
+                    is Value.VInt -> "value" to value.value.toDouble()
+                    is Value.VDouble -> "value" to value.value
+                    else -> return null
+                }
+            val shown =
+                when (value) {
+                    is Value.VInt -> value.value.toString()
+                    is Value.VDouble -> value.value.toString()
+                    else -> measured.toLong().toString()
+                }
+            if (min != null && measured < min) return "$path: $what $shown is below the minimum $min"
+            if (max != null && measured > max) return "$path: $what $shown is above the maximum $max"
+            return null
+        }
+
+        override fun toString(): String = "$inner[${min ?: ""}..${max ?: ""}]"
+    }
+
     /** Unknown fields are rejected, since they are usually typos. */
     data class Struct(val fields: List<Field>) : Type {
         init {
@@ -135,6 +207,14 @@ sealed interface Type {
         fun map(value: Type): Type = MapOf(value)
 
         fun struct(vararg fields: Field): Type = Struct(fields.toList())
+
+        fun enum(vararg values: String): Type = Enum(values.toList())
+
+        fun handle(kind: String): Type = Handle(kind)
+
+        internal const val MAX_SHOWN = 40
+
+        internal fun isWordChar(c: Char): Boolean = c.isLetterOrDigit() || c == '_'
 
         /** Parses the text form. Throws [IllegalArgumentException] with the error position. */
         fun parse(text: String): Type = TypeParser(text).parseAll()
@@ -238,6 +318,7 @@ fun Type.conform(value: Value): Value =
     when {
         value is Value.VNull -> value
         this is Type.Nullable -> inner.conform(value)
+        this is Type.Bounded -> inner.conform(value)
         this is Type.ListOf && value is Value.VArray -> Value.VArray(value.items.map(item::conform))
         this is Type.MapOf && value is Value.VObject -> Value.VObject(value.entries.mapValues { (_, v) -> this.value.conform(v) })
         this is Type.Struct && value is Value.VObject -> Value.VObject(conformFields(fields, value.entries))
@@ -273,19 +354,70 @@ private class TypeParser(private val text: String) {
                 parseStruct()
             } else {
                 when (val word = word()) {
+                    "enum" -> parseEnum()
+                    "handle" -> {
+                        expect('<')
+                        val kind = word()
+                        expect('>')
+                        Type.Handle(kind)
+                    }
                     "list" -> Type.ListOf(parseArgument())
                     "map" -> Type.MapOf(parseArgument())
                     else -> Type.Primitive.entries.firstOrNull { it.keyword == word } ?: fail("unknown type '$word'")
                 }
             }
         skipSpace()
+        val sized = if (peek() == '[') parseBounds(base) else base
         depth--
         return if (peek() == '?') {
             pos++
-            Type.Nullable(base)
+            Type.Nullable(sized)
         } else {
-            base
+            sized
         }
+    }
+
+    private fun parseEnum(): Type {
+        expect('<')
+        val values = mutableListOf(word())
+        while (true) {
+            skipSpace()
+            when (peek()) {
+                '|' -> {
+                    pos++
+                    values += word()
+                }
+                '>' -> {
+                    pos++
+                    return Type.Enum(values)
+                }
+                else -> fail("expected '|' or '>'")
+            }
+        }
+    }
+
+    private fun parseBounds(base: Type): Type {
+        expect('[')
+        val min = number()
+        expect('.')
+        expect('.')
+        val max = number()
+        expect(']')
+        skipSpace()
+        return try {
+            Type.Bounded(base, min, max)
+        } catch (e: IllegalArgumentException) {
+            fail(e.message ?: "bad limit")
+        }
+    }
+
+    private fun number(): Long? {
+        skipSpace()
+        val start = pos
+        if (peek() == '-') pos++
+        while (pos < text.length && text[pos].isDigit()) pos++
+        if (pos == start) return null
+        return text.substring(start, pos).toLongOrNull() ?: fail("not a number")
     }
 
     private fun parseArgument(): Type {
@@ -323,7 +455,7 @@ private class TypeParser(private val text: String) {
     private fun word(): String {
         skipSpace()
         val start = pos
-        while (pos < text.length && (text[pos].isLetterOrDigit() || text[pos] == '_')) pos++
+        while (pos < text.length && Type.isWordChar(text[pos])) pos++
         if (start == pos) fail("expected a name")
         return text.substring(start, pos)
     }
