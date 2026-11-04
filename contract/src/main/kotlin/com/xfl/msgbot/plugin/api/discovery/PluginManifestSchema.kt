@@ -25,6 +25,14 @@ object PluginManifestSchema {
     const val TAG_TOOLING = "tooling"
     const val TAG_OPTION = "option"
 
+    /**
+     * A direct child of the root: a setting of the whole plugin, not of one project. It has the same
+     * attributes as `<option>`. Plugin settings are set once, in the host's plugin list, and the host
+     * adds their values to `LoadRequest.options` of every engine of the plugin, over a project's own
+     * option of the same key.
+     */
+    const val TAG_SETTING = "setting"
+
     /** Root attribute: the plugin's [com.xfl.msgbot.plugin.api.protocol.ProtocolVersion.CURRENT]. */
     const val ATTR_PROTOCOL = "protocol"
 
