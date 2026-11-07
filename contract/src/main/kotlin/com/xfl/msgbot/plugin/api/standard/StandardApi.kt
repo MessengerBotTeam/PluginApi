@@ -80,6 +80,11 @@ object StandardApi {
                 optional("followLinks", Type.BOOL, doc = "True when left out. False describes a symbolic link itself.")
             }
             function("realpath", returns = Type.STRING, doc = "The absolute path with every link followed; ENOENT when nothing is there.") { param("path", Type.STRING) }
+            function(
+                "tmpdir",
+                returns = Type.STRING,
+                doc = "The absolute path of the temporary folder, which the host creates. Whether the script may use it is up to its file rules.",
+            )
             function("list", returns = Type.list(entry), doc = "The entries of a folder, in no particular order.") { param("path", Type.STRING) }
             function(
                 "names",
