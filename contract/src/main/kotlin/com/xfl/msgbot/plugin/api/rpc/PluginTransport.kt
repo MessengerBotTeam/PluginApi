@@ -5,6 +5,7 @@
 
 package com.xfl.msgbot.plugin.api.rpc
 
+import com.xfl.msgbot.plugin.api.call.CallException
 import com.xfl.msgbot.plugin.api.serialization.BytesChannel
 
 /**
@@ -25,4 +26,13 @@ interface PluginTransport {
 
     /** Channel for large byte payloads. Defaults to inline. */
     val bytes: BytesChannel get() = BytesChannel.INLINE
+
+    /**
+     * Asks the other side for a file descriptor, see [com.xfl.msgbot.plugin.api.engine.HostBridge.openFile].
+     * A transport that cannot pass descriptors answers `unavailable`.
+     */
+    fun openFile(
+        path: String,
+        mode: Int,
+    ): Int = throw CallException.unavailable("This transport cannot pass files")
 }

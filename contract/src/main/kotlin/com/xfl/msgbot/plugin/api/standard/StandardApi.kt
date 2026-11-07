@@ -53,6 +53,103 @@ object StandardApi {
             function("exists", returns = Type.BOOL) { param("path", Type.STRING) }
         }
 
+    /**
+     * The file system calls an engine needs to offer its language's own file API. File contents do not
+     * go through here: engines open them with [com.xfl.msgbot.plugin.api.engine.HostBridge.openFile].
+     * A failing call answers with code `failed` and a message that starts with the POSIX error name,
+     * for example `ENOENT: no such file or directory, stat 'a/b'`.
+     */
+    val Fs: ModuleSpec =
+        moduleSpec("fs") {
+            doc = "Files and folders inside the project folder. Paths outside it are refused with EACCES."
+            val entry =
+                Type.struct {
+                    field("name", Type.STRING)
+                    field("isDirectory", Type.BOOL)
+                    field("isSymbolicLink", Type.BOOL)
+                    field("size", Type.INT)
+                    field("modifiedMs", Type.INT)
+                    field("accessedMs", Type.INT)
+                    field("createdMs", Type.INT)
+                    field("mode", Type.INT, doc = "The permission bits, for example 0o644")
+                    field("uid", Type.INT)
+                    field("gid", Type.INT)
+                }
+            function("stat", returns = entry.nullable(), doc = "The entry at the path, or null when there is none.") {
+                param("path", Type.STRING)
+                optional("followLinks", Type.BOOL, doc = "True when left out. False describes a symbolic link itself.")
+            }
+            function("realpath", returns = Type.STRING, doc = "The absolute path with every link followed; ENOENT when nothing is there.") { param("path", Type.STRING) }
+            function("list", returns = Type.list(entry), doc = "The entries of a folder, in no particular order.") { param("path", Type.STRING) }
+            function(
+                "names",
+                returns = Type.BYTES,
+                doc =
+                    "The entries of a folder as names only, much cheaper than list. One byte string: for each entry a kind byte " +
+                        "('d' folder, 'l' symbolic link, 'f' anything else, '-' when withTypes was not asked), the name in UTF-8 and a zero byte.",
+            ) {
+                param("path", Type.STRING)
+                optional("withTypes", Type.BOOL, doc = "False when left out.")
+            }
+            function("access", returns = Type.BOOL, doc = "True when the path exists and may be used as mode asks; EACCES or ENOENT otherwise.") {
+                param("path", Type.STRING)
+                optional("mode", Type.INT, doc = "R_OK (4), W_OK (2) and X_OK (1) added together; 0 only asks whether it exists.")
+            }
+            function(
+                "statfs",
+                returns =
+                    Type.struct {
+                        field("type", Type.INT)
+                        field("bsize", Type.INT)
+                        field("blocks", Type.INT)
+                        field("bfree", Type.INT)
+                        field("bavail", Type.INT)
+                        field("files", Type.INT)
+                        field("ffree", Type.INT)
+                    },
+                doc = "The size of the storage the path is on, in blocks of bsize bytes.",
+            ) { param("path", Type.STRING) }
+            function("mkdir", returns = Type.BOOL, doc = "Creates a folder. False when it already exists as a folder.") {
+                param("path", Type.STRING)
+                optional("recursive", Type.BOOL, doc = "Creates missing parents too. Without it a missing parent is ENOENT.")
+            }
+            function("remove", returns = Type.BOOL, doc = "Deletes a file or folder. False when there was nothing to delete.") {
+                param("path", Type.STRING)
+                optional("recursive", Type.BOOL, doc = "Deletes a folder's content too. Without it a folder that is not empty is ENOTEMPTY.")
+            }
+            function("rename", returns = Type.BOOL) {
+                param("from", Type.STRING)
+                param("to", Type.STRING)
+            }
+            function("symlink", returns = Type.BOOL, doc = "Makes [path] a link to [target], which is stored as it is written.") {
+                param("target", Type.STRING)
+                param("path", Type.STRING)
+            }
+            function("link", returns = Type.BOOL, doc = "Makes [path] another name of the file [existing]. Hard links only exist where the storage has them.") {
+                param("existing", Type.STRING)
+                param("path", Type.STRING)
+            }
+            function("readlink", returns = Type.STRING, doc = "Where a symbolic link points; EINVAL when the path is not a link.") { param("path", Type.STRING) }
+            function("truncate", returns = Type.BOOL) {
+                param("path", Type.STRING)
+                param("size", Type.INT)
+            }
+            function("chmod", returns = Type.BOOL) {
+                param("path", Type.STRING)
+                param("mode", Type.INT)
+            }
+            function("chown", returns = Type.BOOL, doc = "Needs more rights than the app has, such as Shizuku; EPERM without them.") {
+                param("path", Type.STRING)
+                param("uid", Type.INT)
+                param("gid", Type.INT)
+            }
+            function("utimes", returns = Type.BOOL) {
+                param("path", Type.STRING)
+                param("accessedMs", Type.INT)
+                param("modifiedMs", Type.INT)
+            }
+        }
+
     val Db: ModuleSpec =
         moduleSpec("db") {
             doc = "A per-project key-value store of strings."
@@ -181,7 +278,7 @@ object StandardApi {
             }
         }
 
-    val HOST: List<ModuleSpec> = listOf(Project, Log, File, Db, Http, Device, Sys)
+    val HOST: List<ModuleSpec> = listOf(Project, Log, File, Fs, Db, Http, Device, Sys)
 
     /** The host's sandbox module, which only the host side adds, so it is not in [HOST]. */
     const val SANDBOX_NAMESPACE = "sandbox"

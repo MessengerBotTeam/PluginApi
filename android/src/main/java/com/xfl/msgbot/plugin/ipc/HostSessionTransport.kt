@@ -5,6 +5,7 @@
 
 package com.xfl.msgbot.plugin.ipc
 
+import android.os.ParcelFileDescriptor
 import android.os.RemoteException
 import android.os.SharedMemory
 import android.util.Log
@@ -25,6 +26,9 @@ class HostSessionTransport(private val service: IPluginService) : PluginTranspor
     private val closed = AtomicBoolean(false)
 
     @Volatile private var session: Long = 0
+
+    /** What the plugin may open with `openFile`. Without it the plugin is told the host serves no files. */
+    @Volatile var files: HostFiles? = null
 
     private val shared = SharedBytes { id, region -> deliver { service.sendShared(requireSession(), id, region) } }
 
@@ -57,6 +61,22 @@ class HostSessionTransport(private val service: IPluginService) : PluginTranspor
                 transferId: Long,
                 region: SharedMemory,
             ) = shared.receive(transferId, region)
+
+            override fun openFile(
+                path: String,
+                mode: Int,
+            ): ParcelFileDescriptor? {
+                val served = files ?: return null
+                // Only these cross Binder as exceptions; anything else would take the host down.
+                try {
+                    return served.open(path, mode)
+                } catch (e: IllegalStateException) {
+                    throw e
+                } catch (e: Throwable) {
+                    Log.w(TAG, "A file could not be opened for the plugin", e)
+                    throw IllegalStateException("EIO: ${e.message ?: e.javaClass.simpleName}")
+                }
+            }
         }
 
     /** The protocol is negotiated in the first request, `hello`. */

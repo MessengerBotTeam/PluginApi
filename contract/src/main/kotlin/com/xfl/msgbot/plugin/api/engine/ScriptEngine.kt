@@ -5,6 +5,7 @@
 
 package com.xfl.msgbot.plugin.api.engine
 
+import com.xfl.msgbot.plugin.api.call.CallException
 import com.xfl.msgbot.plugin.api.call.CallResult
 import com.xfl.msgbot.plugin.api.schema.ModuleSpec
 import com.xfl.msgbot.plugin.api.value.Value
@@ -72,6 +73,44 @@ interface HostBridge {
         args: Map<String, Value>,
         onResult: (CallResult) -> Unit,
     )
+
+    /**
+     * Opens a file of this project through the host and returns a file descriptor of this process.
+     * The caller owns it and must close it. [path] is absolute or relative to the project folder, and
+     * must stay inside it. [mode] is a [HostFileMode]. Blocks the engine thread.
+     *
+     * @throws CallException failing with [com.xfl.msgbot.plugin.api.call.ErrorCode.FAILED] whose message starts
+     * with the POSIX error name (`ENOENT: ...`), or with `unavailable` when the host serves no files.
+     */
+    fun openFile(
+        path: String,
+        mode: Int,
+    ): Int = throw CallException.unavailable("This host serves no files")
+}
+
+/**
+ * How [HostBridge.openFile] opens a file. Without a flag the file is opened for reading and must exist.
+ * [WRITE] or [APPEND] opens it for writing, [READ_WRITE] adds reading to that, or on its own opens an
+ * existing file for both. [EXCLUSIVE] goes with [WRITE] or [APPEND].
+ */
+object HostFileMode {
+    const val READ = 0
+
+    /** Creates the file or empties it. */
+    const val WRITE = 1
+
+    /** Creates the file or adds to its end. */
+    const val APPEND = 2
+
+    /** With [WRITE] or [APPEND]: fails with `EEXIST` when the file already exists. */
+    const val EXCLUSIVE = 4
+
+    /**
+     * Reading and writing through one descriptor. Alone it opens an existing file without emptying it
+     * (`r+`), with [WRITE] it creates or empties the file (`w+`), with [APPEND] it creates it or adds to
+     * its end (`a+`). A host whose file system cannot give such a descriptor fails with `EACCES`.
+     */
+    const val READ_WRITE = 8
 }
 
 /** The engine thread. Tasks run serially, in order, and never after the engine closes. */

@@ -112,7 +112,7 @@ class HostSessionTransportTest {
                 File(base, "com/xfl/msgbot/plugin/ipc/$it.aidl").readText().replace(Regex("//[^\\n]*"), "").replace(Regex("\\s+"), "")
             }
         val hash = MessageDigest.getInstance("SHA-256").digest(canonical.toByteArray()).joinToString("") { "%02x".format(it) }
-        assertEquals(AIDL_V1 to 1, hash to BinderContract.VERSION)
+        assertEquals(AIDL_V2 to 2, hash to BinderContract.VERSION)
     }
 
     @Test
@@ -140,6 +140,27 @@ class HostSessionTransportTest {
         transport.close()
         service.callback!!.onShared(1, SharedMemory.create("late", 16))
         assertTrue(runCatching { transport.bytes.resolve(1, 16) }.exceptionOrNull() is MalformedFrameException)
+    }
+
+    @Test
+    fun aHostWithoutFilesAnswersNull() {
+        val service = Service()
+        val transport = HostSessionTransport(service)
+        transport.open("engine", "node")
+        assertEquals(null, service.callback!!.openFile("a.txt", 0))
+    }
+
+    @Test
+    fun aFileFailureReachesThePluginAsAnErrorNameAndNeverCrashesTheHost() {
+        val service = Service()
+        val transport = HostSessionTransport(service)
+        transport.open("engine", "node")
+        transport.files = HostFiles { _, _ -> HostFiles.fail("ENOENT", "no such file or directory, open 'a.txt'") }
+        val named = runCatching { service.callback!!.openFile("a.txt", 0) }.exceptionOrNull()
+        assertTrue("$named", named is IllegalStateException && named.message!!.startsWith("ENOENT: "))
+        transport.files = HostFiles { _, _ -> throw java.io.IOException("disk gone") }
+        val other = runCatching { service.callback!!.openFile("a.txt", 0) }.exceptionOrNull()
+        assertTrue("$other", other is IllegalStateException && other.message!!.startsWith("EIO: "))
     }
 
     /** Answers like a live plugin until asked to carry a frame, then like a dead process. */
@@ -174,6 +195,6 @@ class HostSessionTransportTest {
     }
 
     private companion object {
-        const val AIDL_V1 = "7a477998382ec2e59c2fbd0e78082ca1f26ac948b85c55a8ab281e8c7085af08"
+        const val AIDL_V2 = "4ef5afd5883debbce522e6f08727dcd7bde5d63b3a78e4013a1448e2c9697ad9"
     }
 }

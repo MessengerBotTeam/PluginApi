@@ -12,7 +12,7 @@ package com.xfl.msgbot.plugin.ipc
  */
 object BinderContract {
     /** Raised whenever a method is added to IPluginService or IPluginCallback. */
-    const val VERSION = 1
+    const val VERSION = 2
 
     /** The oldest peer this build can talk to. Raise only when a method this build calls is missing from older peers. */
     const val MIN_VERSION = 1

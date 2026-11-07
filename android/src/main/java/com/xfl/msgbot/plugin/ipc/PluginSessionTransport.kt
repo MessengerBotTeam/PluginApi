@@ -7,6 +7,7 @@ package com.xfl.msgbot.plugin.ipc
 
 import android.os.RemoteException
 import android.os.SharedMemory
+import com.xfl.msgbot.plugin.api.call.CallException
 import com.xfl.msgbot.plugin.api.rpc.PluginTransport
 import com.xfl.msgbot.plugin.api.rpc.TransportClosedException
 import com.xfl.msgbot.plugin.api.serialization.BytesChannel
@@ -27,6 +28,23 @@ class PluginSessionTransport(private val callback: IPluginCallback) : PluginTran
     override val bytes: BytesChannel get() = shared
 
     override fun send(frame: ByteArray) = deliver { callback.onFrame(frame) }
+
+    override fun openFile(
+        path: String,
+        mode: Int,
+    ): Int {
+        val file =
+            try {
+                callback.openFile(path, mode)
+            } catch (e: IllegalStateException) {
+                throw CallException.failed(e.message ?: "EIO: the host could not open '$path'")
+            } catch (e: SecurityException) {
+                throw CallException.failed("EACCES: ${e.message ?: path}")
+            } catch (e: RemoteException) {
+                throw CallException.unavailable("The host could not open '$path': ${e.message ?: e.javaClass.simpleName}")
+            } ?: throw CallException.unavailable("The host serves no files")
+        return file.detachFd()
+    }
 
     /** Binder reports a full one-way buffer as a [RemoteException] too; only a dead host closes the transport. */
     private inline fun deliver(call: () -> Unit) {

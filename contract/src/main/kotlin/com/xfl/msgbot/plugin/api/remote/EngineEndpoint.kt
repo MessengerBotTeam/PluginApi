@@ -82,6 +82,11 @@ class EngineEndpoint(
                     ) = peer.requestAsync(Wire.HOST_CALL, Wire.obj("function" to function, "args" to args, Wire.deadline(callTimeoutMs)), callTimeoutMs) { result ->
                         thread.post { onResult(result) }
                     }
+
+                    override fun openFile(
+                        path: String,
+                        mode: Int,
+                    ): Int = transport.openFile(path, mode)
                 }
 
             override val scheduler: EngineScheduler = thread
