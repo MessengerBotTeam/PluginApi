@@ -26,7 +26,7 @@ sealed interface Value {
     value class VString(val value: String) : Value
 
     /** Compared by content. */
-    class VBytes(val value: ByteArray) : Value {
+    data class VBytes(val value: ByteArray) : Value {
         override fun equals(other: Any?): Boolean = other is VBytes && value.contentEquals(other.value)
 
         override fun hashCode(): Int = value.contentHashCode()
