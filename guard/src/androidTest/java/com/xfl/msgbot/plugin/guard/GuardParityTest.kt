@@ -30,6 +30,11 @@ class GuardParityTest {
             "java.nio.file.Path",
         )
 
+    // Final classes whose objects stay real: only their static members are replaced.
+    private val staticsOnly = setOf("android.database.sqlite.SQLiteDatabase")
+
+    private val hiddenFields = setOf("CONFLICT_VALUES")
+
     // Public in the class at run time but @hide in the SDK: apps cannot call them anyway.
     private val hidden =
         setOf(
@@ -52,15 +57,19 @@ class GuardParityTest {
         for ((name, replacement) in GuardPolicy.substitutes) {
             if (name in skipped) continue
             val real = Class.forName(name)
+            val onlyStatic = name in staticsOnly
             for (constructor in real.constructors) {
+                if (onlyStatic) break
                 runCatching { replacement.getConstructor(*constructor.parameterTypes) }.onFailure { missing += "$name ${signature("<init>", constructor.parameterTypes)}" }
             }
             for (method in real.methods) {
                 if (method.declaringClass == Any::class.java || name == "android.os.Environment" && method.name in hidden) continue
+                if (onlyStatic && !Modifier.isStatic(method.modifiers)) continue
                 val found = runCatching { replacement.getMethod(method.name, *method.parameterTypes) }.getOrNull()
                 if (found == null || Modifier.isStatic(found.modifiers) != Modifier.isStatic(method.modifiers)) missing += "$name ${signature(method.name, method.parameterTypes)}"
             }
             for (field in real.fields) {
+                if (onlyStatic && !Modifier.isStatic(field.modifiers) || field.name in hiddenFields) continue
                 runCatching { replacement.getField(field.name) }.onFailure { missing += "$name field ${field.name}" }
             }
         }
