@@ -1,6 +1,7 @@
 package com.xfl.msgbot.plugin.api.remote
 
 import com.xfl.msgbot.plugin.api.call.CallResult
+import com.xfl.msgbot.plugin.api.engine.ClassAccess
 import com.xfl.msgbot.plugin.api.engine.EngineContext
 import com.xfl.msgbot.plugin.api.engine.EngineException
 import com.xfl.msgbot.plugin.api.engine.EngineScheduler
@@ -129,6 +130,7 @@ class EngineSessionTest {
             when (source) {
                 "loaded" -> Value.of(loaded?.let { listOf(it.language, it.entry, it.options["strict"], it.api.map { spec -> spec.namespace }) })
                 "seen" -> Value.of(seen.toList())
+                "classAccess" -> loaded?.classAccess?.toValue() ?: Value.VNull
                 else -> Value.VNull
             }
 
@@ -167,6 +169,23 @@ class EngineSessionTest {
         val engine = connect()
         engine.load(request)
         assertEquals(Value.of(listOf("fake", "main.fake", "true", StandardApi.HOST.map { it.namespace })), engine.eval("loaded"))
+    }
+
+    @Test
+    fun `the class access arrives with the load, and its absence stays absent`() {
+        val plain = connect()
+        plain.load(request)
+        assertEquals(Value.VNull, plain.eval("classAccess"))
+        val access = ClassAccess(ClassAccess.Preset.CUSTOM, allow = listOf("com.example.*"), deny = listOf("java.net.Socket"), restrictions = false)
+        val guarded = connect()
+        guarded.load(request.copy(classAccess = access))
+        assertEquals(access, ClassAccess.fromValue(guarded.eval("classAccess")))
+    }
+
+    @Test
+    fun `an unknown preset reads as the safe one`() {
+        val value = Value.VObject(mapOf("preset" to Value.VString("future")))
+        assertEquals(ClassAccess.DEFAULT, ClassAccess.fromValue(value))
     }
 
     @Test

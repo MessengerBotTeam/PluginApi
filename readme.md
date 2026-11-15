@@ -8,7 +8,8 @@ MessengerBotR의 플러그인 계약이다. 현재 개발 버전은 `0.1.0-SNAPS
 |---|---|
 | `contract` | 값, API 스키마, 표준 모듈, 엔진·제공자·도구 SPI, 대칭 RPC. Android에 의존하지 않는다. |
 | `android` | `PluginService`, Binder 세션, 공유 메모리 전송 |
-| `tck` | 엔진과 제공자를 호스트 없이 돌려 보는 `EngineHarness`, `ProviderHarness`. JavaScript 엔진의 적합성 테스트(`JavaScriptEngineConformance`)와 제공자의 적합성 테스트(`ProviderConformance`) |
+| `guard` | Java를 쓰는 엔진의 파일·클래스 가드. `File`, 스트림, `RandomAccessFile`, nio, `ZipFile` 등을 호스트 디스크립터 위의 같은 모양 클래스로 바꾸고, `ClassAccess`로 클래스 접근을 정한다. 엔진에는 이름 조회(`GuardPolicy.lookup`)와 값 변환(`GuardPolicy.replace`)만 연결하면 된다 |
+| `tck` | 엔진과 제공자를 호스트 없이 돌려 보는 `EngineHarness`, `ProviderHarness`. JavaScript 엔진의 적합성 테스트(`JavaScriptEngineConformance`), Java 가드의 적합성 테스트(`JavaGuardConformance`, 기기에서 실행), 제공자의 적합성 테스트(`ProviderConformance`) |
 
 ## 구조
 

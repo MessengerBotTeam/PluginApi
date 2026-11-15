@@ -7,6 +7,7 @@ package com.xfl.msgbot.plugin.api.remote
 
 import com.xfl.msgbot.plugin.api.call.CallException
 import com.xfl.msgbot.plugin.api.call.CallResult
+import com.xfl.msgbot.plugin.api.engine.ClassAccess
 import com.xfl.msgbot.plugin.api.engine.EngineException
 import com.xfl.msgbot.plugin.api.engine.LoadRequest
 import com.xfl.msgbot.plugin.api.engine.ProfileScript
@@ -118,6 +119,7 @@ internal object Wire {
             "entry" to request.entry,
             "sources" to request.sources,
             "options" to request.options,
+            "classAccess" to request.classAccess?.toValue(),
         )
 
     fun loadRequestOf(value: Value): LoadRequest {
@@ -133,6 +135,7 @@ internal object Wire {
                     v.asStringOrNull() ?: throw IllegalArgumentException("A source is text")
                 },
             options = map["options"]?.map()?.mapValues { (_, v) -> v.asStringOrNull().orEmpty() }.orEmpty(),
+            classAccess = map["classAccess"]?.takeIf { it != Value.VNull }?.let(ClassAccess::fromValue),
         )
     }
 

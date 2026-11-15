@@ -34,6 +34,9 @@ class EngineHarness(factory: ScriptEngineFactory) : AutoCloseable {
     /** Host implementations by qualified name. Unlisted functions answer unknown_function. */
     val functions = ConcurrentHashMap<String, (Map<String, Value>) -> CallResult>()
 
+    /** Answers [HostBridge.openFile]; null means the host serves no files. */
+    @Volatile var openFile: ((path: String, mode: Int) -> Int)? = null
+
     private val thread = EngineThread(threadName) { message, _ -> errors += message }
     private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "tck-host").apply { isDaemon = true } }
 
@@ -59,6 +62,14 @@ class EngineHarness(factory: ScriptEngineFactory) : AutoCloseable {
                             val result = functions[function]?.invoke(args) ?: CallResult.unknownFunction(function)
                             thread.post { onResult(result) }
                         }
+                    }
+
+                    override fun openFile(
+                        path: String,
+                        mode: Int,
+                    ): Int {
+                        calls += Call("openFile", mapOf("path" to Value.VString(path), "mode" to Value.of(mode)), Thread.currentThread().name)
+                        return (openFile ?: return super.openFile(path, mode))(path, mode)
                     }
                 }
 
