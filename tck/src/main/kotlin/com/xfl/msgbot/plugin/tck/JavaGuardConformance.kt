@@ -18,6 +18,7 @@ import org.junit.Before
 import org.junit.Test
 import java.io.File
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -166,6 +167,17 @@ abstract class JavaGuardConformance {
         assertEquals("hi", File(files.root, "fmt.txt").readText())
         assertEquals("ok:true", text("t(function () { return ${j("android.graphics.BitmapFactory")}.decodeFile('${outside.path}') === null; })"))
         assertEquals(1, warnings().count { it.contains(outside.path) }, warnings().toString())
+    }
+
+    /** Runs where the engine app has no All files access, as on a fresh install. */
+    @Test
+    fun sqliteOnStorageNeedsAllFilesAccess() {
+        load()
+        val sqlite = j("android.database.sqlite.SQLiteDatabase")
+        assertEquals("threw", text("t(function () { return $sqlite.openOrCreateDatabase('a.db', null).isOpen(); })"))
+        assertFalse(File(files.root, "a.db").exists())
+        assertEquals("ok:true", text("t(function () { var d = $sqlite.openOrCreateDatabase(':memory:', null); var open = d.isOpen(); d.close(); return open; })"))
+        assertEquals(1, warnings().count { it.contains("SQLite") }, warnings().toString())
     }
 
     @Test

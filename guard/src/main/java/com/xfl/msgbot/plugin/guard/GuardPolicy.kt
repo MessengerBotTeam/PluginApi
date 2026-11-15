@@ -39,6 +39,7 @@ object GuardPolicy {
             "java.util.Formatter" to GuardFormatter::class.java,
             "android.graphics.BitmapFactory" to GuardBitmapFactory::class.java,
             "android.media.MediaMetadataRetriever" to GuardMediaMetadataRetriever::class.java,
+            "android.database.sqlite.SQLiteDatabase" to GuardSQLiteDatabase::class.java,
             "java.util.zip.ZipFile" to GuardZipFile::class.java,
             "java.util.jar.JarFile" to GuardJarFile::class.java,
             "java.nio.file.Path" to GuardPath::class.java,

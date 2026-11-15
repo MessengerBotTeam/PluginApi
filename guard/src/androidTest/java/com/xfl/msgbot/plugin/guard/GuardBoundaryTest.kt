@@ -47,8 +47,11 @@ class GuardBoundaryTest {
         use(ClassAccess.DEFAULT)
     }
 
-    private fun use(access: ClassAccess) {
-        session = GuardSession(host, ClassRules(access, listOf("com.example.engine.")))
+    private fun use(
+        access: ClassAccess,
+        storageAccess: Boolean = false,
+    ) {
+        session = GuardSession(host, ClassRules(access, listOf("com.example.engine.")), storageAccess = { storageAccess })
         val old = GuardContext.swap(session)
         if (!::top.isInitialized || previous == null) previous = old
     }
@@ -282,5 +285,36 @@ class GuardBoundaryTest {
         buffer.put("fmt ".toByteArray()).putInt(16).putShort(1).putShort(1).putInt(rate).putInt(rate * 2).putShort(2).putShort(16)
         buffer.put("data".toByteArray()).putInt(data)
         return buffer.array()
+    }
+
+    @Test
+    fun sqliteWithoutStorageAccessPointsToTheDbModule() {
+        val error = assertFailsWith<android.database.sqlite.SQLiteCantOpenDatabaseException> { GuardSQLiteDatabase.openOrCreateDatabase("a.db", null) }
+        assertTrue(error.message!!.contains("db module"), error.message)
+        assertFalse(File(project, "a.db").exists())
+        GuardSQLiteDatabase.openOrCreateDatabase(":memory:", null).use { assertTrue(it.isOpen) }
+        GuardSQLiteDatabase.create(null).use { assertTrue(it.isOpen) }
+        assertFailsWith<android.database.sqlite.SQLiteCantOpenDatabaseException> { GuardSQLiteDatabase.openOrCreateDatabase("b.db", null) }
+        assertEquals(1, host.logs.count { it.contains("SQLite") }, host.logs.toString())
+    }
+
+    @Test
+    fun sqliteWithStorageAccessFollowsTheFileRules() {
+        use(ClassAccess.DEFAULT, storageAccess = true)
+        GuardSQLiteDatabase.openOrCreateDatabase("a.db", null).use { db ->
+            db.execSQL("create table t(v text)")
+            db.execSQL("insert into t values ('x')")
+        }
+        assertTrue(File(project, "a.db").exists())
+        GuardSQLiteDatabase.openDatabase(File(project, "a.db").path, null, GuardSQLiteDatabase.OPEN_READONLY).use { db ->
+            db.rawQuery("select v from t", null).use { assertTrue(it.moveToFirst()); assertEquals("x", it.getString(0)) }
+        }
+        val secret = File(top, "secret.db").path
+        assertFailsWith<android.database.sqlite.SQLiteCantOpenDatabaseException> { GuardSQLiteDatabase.openOrCreateDatabase(secret, null) }
+        assertFalse(File(secret).exists())
+        assertFailsWith<android.database.sqlite.SQLiteCantOpenDatabaseException> { GuardSQLiteDatabase.openOrCreateDatabase(GuardFile("../x.db"), null) }
+        assertTrue(GuardSQLiteDatabase.deleteDatabase(GuardFile("a.db")))
+        assertFalse(File(project, "a.db").exists())
+        assertEquals(1, host.logs.count { it.contains(secret) }, host.logs.toString())
     }
 }
