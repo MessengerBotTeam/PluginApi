@@ -160,6 +160,15 @@ abstract class JavaGuardConformance {
     }
 
     @Test
+    fun classesThatOpenAPathGoThroughTheHost() {
+        load()
+        text("t(function () { var f = new (${j("java.util.Formatter")})('fmt.txt'); f.out().append('hi'); f.close(); return 1; })")
+        assertEquals("hi", File(files.root, "fmt.txt").readText())
+        assertEquals("ok:true", text("t(function () { return ${j("android.graphics.BitmapFactory")}.decodeFile('${outside.path}') === null; })"))
+        assertEquals(1, warnings().count { it.contains(outside.path) }, warnings().toString())
+    }
+
+    @Test
     fun placesOutsideTheRulesAreRefused() {
         load()
         val path = outside.path
