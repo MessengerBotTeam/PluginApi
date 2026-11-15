@@ -93,6 +93,39 @@ globalThis.onMessage = (handler) => events.on('bot.message', (m) => handler({
 2. 프로필(`LoadRequest.profile`)을 실행한다. 프로필은 `require('msgbot')`를 쓸 수 있다.
 3. 진입 파일(`LoadRequest.entry`)을 전역 스크립트로 실행한다. 여기서 선언한 `function response`는 전역에 남는다.
 
-`require`는 `./`, `../`, `/`로 시작하는 경로를 프로젝트 소스에서 찾는다. 찾는 순서는 경로 그대로, `.js`, `.json`, `/index.js`다. `msgbot`은 키트다. 그 밖의 이름은 런타임 고유의 `require`에 넘긴다. Node의 내장 모듈이 그런 예이며, 고유 `require`가 없는 런타임에서는 오류가 난다. `JavaScriptBinding.MODULE_LOADER`에 이 규칙을 구현한 로더가 있으므로 엔진은 파일을 함수로 컴파일하는 방법만 제공하면 된다.
+`require`는 `./`, `../`, `/`로 시작하는 경로를 프로젝트 소스에서 찾는다. 찾는 순서는 경로 그대로, `.js`, `.json`, `/index.js`다. `msgbot`은 키트이고, `java:`로 시작하는 이름은 Java 모듈이다. 그 밖의 이름은 런타임 고유의 `require`에 넘긴다. Node의 내장 모듈이 그런 예이며, 고유 `require`가 없는 런타임에서는 오류가 난다. `JavaScriptBinding.MODULE_LOADER`에 이 규칙을 구현한 로더가 있으므로 엔진은 파일을 함수로 컴파일하는 방법만 제공하면 된다.
+
+## 모듈
+
+### `java:` 모듈
+`require('java:java.io')`는 Java 패키지를 준다. `require('java:java.io.File')`처럼 마지막 이름이 대문자로 시작하면 그 클래스를 준다. 엔진이 이미 쓰는 클래스 조회를 그대로 거치므로 클래스 접근 규칙과 파일 가드가 똑같이 적용된다. 엔진이 Java를 실행하지 않거나 프로젝트가 Java를 쓰지 않게 했으면, 지정자와 이유를 담은 오류가 난다.
+
+ES 모듈에서는 `import { File } from 'java:java.io'`, `import File from 'java:java.io.File'`로 쓴다. Java 패키지는 이름 목록을 알 수 없으므로, 이름 export는 프로젝트의 import 문이 요청한 이름으로 만든다. `default`는 언제나 패키지나 클래스 자체다.
+
+### CommonJS와 ES 모듈
+파일 형식은 Node와 같이 정한다.
+- `.mjs`는 ES 모듈, `.cjs`는 CommonJS다.
+- `.js`는 최상위에 `import`나 `export` 문이 있으면 ES 모듈이고, 없으면 CommonJS다.
+- 프로필은 언제나 CommonJS다.
+
+ES 모듈을 실행하는 엔진(Node.js, GraalJS)은 두 형식을 다 실행한다.
+- import는 `require`와 같은 이름을 해석한다. 단, 프로젝트 파일은 Node처럼 확장자까지 정확히 써야 한다.
+- ES 모듈에서 CommonJS 파일을 가져오면 `default`는 `module.exports`이고, 이름 export는 그 객체의 열거 가능한 키다.
+- CommonJS에서 ES 모듈을 `require`하면 오류가 난다.
+- 진입 파일이 ES 모듈이면 최상위 `await`를 쓸 수 있고, 거부되면 로드가 실패한다. 이때 진입 파일의 최상위 선언은 전역이 아니라 모듈 안에 머문다.
+
+CommonJS만 실행하는 엔진(Rhino)은 ES 모듈 파일을 만나면 `require`를 쓰라는 오류를 낸다.
+
+### `#!support` 지시문
+파일 첫 줄에 `#!support esm`, `#!support cjs`, `#!support esm cjs`를 둘 수 있다. 다른 단어는 오류다. 이 줄은 실행 전에 같은 줄 안에서 바뀌므로, 오류의 줄 번호는 원본과 같다. `#!/usr/bin/env node` 같은 다른 `#!` 줄은 무시한다.
+
+- **`esm`, CommonJS만 실행하는 엔진:** 정적 `import`/`export`를 `require`/`module.exports`로 바꿔 실행한다.
+  - 바꾸는 형태: 이름·기본·네임스페이스·부수 효과 import, `export const/let/var/function/class`, `export default`, `export { a as b }`, `export ... from`, `export *`. 동적 `import(x)`는 `require`의 결과를 주는 Promise가 된다.
+  - export는 원래 변수를 읽는 getter이므로 값이 바뀌면 따라간다. 가져온 이름은 import 시점의 값이다.
+  - 최상위 `await`는 쓸 수 없다.
+- **`esm`, ES 모듈을 실행하는 엔진:** 내용과 상관없이 그 파일을 ES 모듈로 실행한다.
+- **`cjs`, ES 모듈 파일:** 그 파일 안에서 `require`를 쓸 수 있다. 그 파일을 기준으로 이름을 해석하는 `require`다. CommonJS 파일에서는 효과가 없다.
+
+엔진은 `JavaScriptBinding.MODULE_LOADER`를 쓰면 이 규칙을 따로 구현하지 않아도 된다. ES 모듈을 실행하는 엔진은 로더가 넘기는 모듈 소스(`makeRequire.esm.entry`, `moduleFor`)를 이름마다 하나씩 컴파일하기만 하면 된다.
 
 모든 JavaScript 코드는 엔진 스레드 하나에서 실행한다. 로드, 이벤트, 타이머, 비동기 응답 같은 작업이 하나 끝날 때마다 Promise 마이크로태스크를 처리한다.
