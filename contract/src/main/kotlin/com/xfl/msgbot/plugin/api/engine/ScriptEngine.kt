@@ -135,6 +135,8 @@ fun interface Cancellable {
  * @property profile the language facade, run after `__api` is bound and before [entry].
  * @property sources project files keyed by path relative to the project folder.
  * @property options per-project settings the engine declared.
+ * @property classAccess the Java classes the project's scripts may use; null when the host sends none, which an
+ * engine that runs Java treats as [ClassAccess.DEFAULT].
  */
 data class LoadRequest(
     val language: String,
@@ -143,6 +145,7 @@ data class LoadRequest(
     val entry: String,
     val sources: Map<String, String>,
     val options: Map<String, String> = emptyMap(),
+    val classAccess: ClassAccess? = null,
 ) {
     init {
         require(entry in sources) { "The entry '$entry' is not among the sources" }

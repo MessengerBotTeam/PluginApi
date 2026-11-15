@@ -42,6 +42,13 @@ object PluginManifestSchema {
     /** A `@string/...` resource. */
     const val ATTR_LABEL = "label"
 
+    // <engine>
+    /**
+     * `true` when the engine lets scripts use Java classes. The host then keeps a [com.xfl.msgbot.plugin.api.engine.ClassAccess]
+     * for each project and sends it in `LoadRequest.classAccess`.
+     */
+    const val ATTR_JAVA = "java"
+
     // <language>
     const val ATTR_NAME = "name"
     const val ATTR_EXTENSION = "extension"
