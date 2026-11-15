@@ -232,4 +232,55 @@ class GuardBoundaryTest {
         val names = ZipFile(zip).use { z -> z.entries().toList().map { it.name } }
         assertEquals(names, GuardZipFile("a.zip").use { z -> z.entries().toList().map { it.name } })
     }
+
+    @Test
+    fun formatterWritesThroughTheHost() {
+        GuardFormatter("f.txt").use { it.format("%s=%d", "a", 1) }
+        assertEquals("a=1", File(project, "f.txt").readText())
+        GuardFormatter(GuardFile("g.txt"), "UTF-8").use { it.format("%s", "가") }
+        assertEquals("가", File(project, "g.txt").readText())
+        assertFailsWith<java.io.UnsupportedEncodingException> { GuardFormatter("h.txt", "no-such-charset") }
+        assertFalse(File(project, "h.txt").exists())
+        assertFailsWith<FileNotFoundException> { GuardFormatter(outside.path) }
+        assertEquals("x", GuardFormatter().format("%s", "x").toString())
+    }
+
+    @Test
+    fun bitmapsDecodeFromTheProjectFolder() {
+        val bitmap = android.graphics.Bitmap.createBitmap(3, 2, android.graphics.Bitmap.Config.ARGB_8888)
+        File(project, "a.png").outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+        val decoded = GuardBitmapFactory.decodeFile("a.png")!!
+        assertEquals(3, decoded.width)
+        assertEquals(2, decoded.height)
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        assertNull(GuardBitmapFactory.decodeFile(File(project, "a.png").path, bounds))
+        assertEquals(3, bounds.outWidth)
+        assertNull(GuardBitmapFactory.decodeFile(outside.path))
+        assertNull(GuardBitmapFactory.decodeFile("missing.png"))
+        assertEquals(1, host.logs.count { it.contains(outside.path) }, host.logs.toString())
+    }
+
+    @Test
+    fun mediaMetadataReadsFromTheProjectFolder() {
+        File(project, "a.wav").writeBytes(wav(8000, 8000))
+        GuardMediaMetadataRetriever().use { retriever ->
+            retriever.setDataSource("a.wav")
+            assertEquals("1000", retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION))
+        }
+        GuardMediaMetadataRetriever().use { it.setDataSource("file://" + File(project, "a.wav").path) }
+        val error = assertFailsWith<IllegalArgumentException> { GuardMediaMetadataRetriever().use { it.setDataSource(outside.path) } }
+        assertEquals("${outside.path} does not exist", error.message)
+    }
+
+    private fun wav(
+        rate: Int,
+        samples: Int,
+    ): ByteArray {
+        val data = samples * 2
+        val buffer = java.nio.ByteBuffer.allocate(44 + data).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        buffer.put("RIFF".toByteArray()).putInt(36 + data).put("WAVE".toByteArray())
+        buffer.put("fmt ".toByteArray()).putInt(16).putShort(1).putShort(1).putInt(rate).putInt(rate * 2).putShort(2).putShort(16)
+        buffer.put("data".toByteArray()).putInt(data)
+        return buffer.array()
+    }
 }
