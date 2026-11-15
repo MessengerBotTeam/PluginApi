@@ -76,6 +76,9 @@ abstract class JavaScriptEngineConformance {
 
     private fun marks(): List<EngineHarness.Call> = harness.calls.filter { it.function == "tck.mark" }
 
+    // Only the refused values matter: an engine may call the host for itself, for example while it starts.
+    private fun assertHostSawNoValue() = assertTrue(harness.calls.none { it.function == "tck.echo" }, "the host never saw them: ${harness.calls}")
+
     @Test
     fun apiIsBoundAsDataBeforeTheProfileRuns() {
         load(
@@ -169,7 +172,7 @@ abstract class JavaScriptEngineConformance {
             """.trimIndent(),
         )
         assertEquals(Value.VString("true/true"), eval("sync + '/' + async"))
-        assertTrue(harness.calls.isEmpty(), "the host never saw them: ${harness.calls}")
+        assertHostSawNoValue()
     }
 
     private fun assertRefused(
@@ -185,7 +188,7 @@ abstract class JavaScriptEngineConformance {
             """.trimIndent(),
         )
         assertEquals(Value.VString("true/true"), eval("sync + '/' + async"))
-        assertTrue(harness.calls.isEmpty(), "the host never saw them: ${harness.calls}")
+        assertHostSawNoValue()
     }
 
     @Test
@@ -222,7 +225,7 @@ abstract class JavaScriptEngineConformance {
             """.trimIndent(),
         )
         assertEquals(Value.VString("true/false"), eval("refused + '/' + ran"))
-        assertTrue(harness.calls.isEmpty(), "the host never saw them: ${harness.calls}")
+        assertHostSawNoValue()
     }
 
     @Test
@@ -411,7 +414,7 @@ abstract class JavaScriptEngineConformance {
             """.trimIndent(),
         )
         assertEquals(Value.VString("true,true"), eval("refused.join(',')"))
-        assertTrue(harness.calls.isEmpty(), "the host never saw them: ${harness.calls}")
+        assertHostSawNoValue()
     }
 
     @Test
