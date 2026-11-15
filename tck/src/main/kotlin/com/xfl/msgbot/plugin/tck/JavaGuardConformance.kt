@@ -234,10 +234,24 @@ abstract class JavaGuardConformance {
     }
 
     @Test
+    fun javaModulesGiveTheSameGuardedClasses() {
+        load()
+        text("t(function () { var File = require('java:java.io').File; return new File('from-package.txt').createNewFile(); })")
+        text("t(function () { var File = require('java:java.io.File'); return new File('from-class.txt').createNewFile(); })")
+        assertTrue(File(files.root, "from-package.txt").exists(), raw.toString())
+        assertTrue(File(files.root, "from-class.txt").exists(), raw.toString())
+        assertEquals("ok:ab", text("t(function () { var b = new (require('java:java.lang').StringBuilder)('a'); b.append('b'); return b.toString(); })"))
+        assertEquals("threw", text("t(function () { return new (require('java:java.io.File'))('${outside.path}').exists(); })"))
+        assertEquals("none", text("has(function () { return require('java:java.lang.reflect').Proxy; })"))
+    }
+
+    @Test
     fun theOffPresetHasNoJava() {
         load(ClassAccess(Preset.OFF))
         assertEquals("none", text("has(function () { return ${j("java.util.UUID")}; })"))
         assertEquals("none", text("has(function () { return ${j("java.io.File")}; })"))
+        assertEquals("threw", text("t(function () { return require('java:java.util').UUID; })"))
+        assertTrue(raw.last().contains("java:java.util"), raw.last())
     }
 
     @Test

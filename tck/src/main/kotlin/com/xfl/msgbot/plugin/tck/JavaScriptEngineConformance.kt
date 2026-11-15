@@ -418,6 +418,30 @@ abstract class JavaScriptEngineConformance {
     }
 
     @Test
+    fun filesWithSupportEsmRunTheirImportsAndExports() {
+        load(
+            "#!support esm\nimport { twice, label } from './lib.js';\nimport kit from 'msgbot';\nglobalThis.out = twice(21) + ':' + label + ':' + typeof kit;",
+            sources =
+                mapOf(
+                    "lib.js" to "#!support esm\nexport function twice(n) { return n * 2; }\nexport const label = 'lib';\nexport default 'unused';",
+                ),
+        )
+        assertEquals(Value.VString("42:lib:object"), eval("out"))
+    }
+
+    @Test
+    fun anUnknownSupportDirectiveFailsTheLoad() {
+        val e = assertFailsWith<EngineException> { load("#!support wasm\nvar a = 1;") }
+        assertTrue(e.message!!.contains("#!support"), e.message)
+    }
+
+    @Test
+    fun anOrdinaryShebangLineIsIgnored() {
+        load("#!/usr/bin/env node\nvar fromShebangFile = 1;")
+        assertEquals(Value.VInt(1), eval("fromShebangFile"))
+    }
+
+    @Test
     fun aScriptThatDoesNotParseFailsTheLoadNamingTheFile() {
         val e = assertFailsWith<EngineException> { load("var = ;") }
         assertTrue(e.message!!.contains("main.js"), e.message)
